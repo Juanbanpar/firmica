@@ -6,8 +6,6 @@ license = "GPL-3.0-or-later"
 
 [features]
 pkcs11 = ["dep:cryptoki"]
-# Useful for build hosts without a compatible system OpenSSL; not a release-packaging policy.
-vendored-openssl = ["openssl/vendored"]
 
 [dependencies]
 firmica-signing.workspace = true

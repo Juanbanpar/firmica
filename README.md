@@ -99,7 +99,7 @@ The iOS test creates a temporary iPhone simulator and opens synthetic links from
 
 The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3` (RUSTSEC-2026-0097), which have known unsoundness advisories. Run `cargo audit --deny unsound` to check dependencies.
 
-The signing libraries can be tested separately from the applications. They require OpenSSL development headers/libraries and the OpenSSL CLI. Enable `vendored-openssl` to build the native library from source; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building), including a C toolchain, Perl and Make (or MSVC/NMake on Windows).
+The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
 ```sh
 cargo test --locked -p firmica-signing -p firmica-certificates --features pkcs11
