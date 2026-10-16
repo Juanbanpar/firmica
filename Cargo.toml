@@ -6,6 +6,7 @@ members = [
     "packages/desktop",
     "packages/mobile",
     "packages/protocol",
+    "packages/core",
 ]
 
 [workspace.dependencies]
@@ -17,3 +18,5 @@ ui = { path = "packages/ui" }
 firmica-protocol = { path = "packages/protocol" }
 thiserror = "2"
 percent-encoding = "2.3"
+
+firmica-core = { path = "packages/core" }
