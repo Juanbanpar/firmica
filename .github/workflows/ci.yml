@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          module=$(dpkg -L libsofthsm2 | rg '/libsofthsm2\.so$' | head -1)
+          module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
           test -n "$module"
           FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
       - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates --features ${{ matrix.features }} --all-targets -- -D warnings
