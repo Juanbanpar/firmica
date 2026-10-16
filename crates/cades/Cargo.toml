@@ -1,0 +1,19 @@
+[package]
+name = "firmica-cades"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+firmica-signing.workspace = true
+cms = { version = "0.2.3", features = ["std"] }
+der = { version = "0.7", features = ["std", "derive"] }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std"] }
+sha2 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+firmica-certificates.workspace = true
+openssl.workspace = true
+secrecy.workspace = true
+tempfile = "3"

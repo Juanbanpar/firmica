@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{certificate, key, verify_with_cli, MESSAGE};
+use common::{certificate, key, verify_cades_with_cli, verify_with_cli, MESSAGE};
 use cryptoki::{
     context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     mechanism::Mechanism,
@@ -11,6 +11,7 @@ use cryptoki::{
     types::AuthPin,
 };
 use der::{asn1::OctetStringRef, Decode};
+use firmica_cades::{sign, ContentMode, SigningOptions};
 use firmica_certificates::{pkcs11::Pkcs11Key, CertificateError};
 use firmica_signing::{SignatureAlgorithm, SigningError, SigningInput, SigningKey};
 use openssl::{
@@ -89,6 +90,7 @@ fn non_exportable_rsa_and_ecdsa_keys_use_the_shared_contract(
     )?;
     let issuer = key(SignatureAlgorithm::RsaPkcs1v15Sha256);
     let mut produced = Vec::new();
+    let mut cades = Vec::new();
     let operation = (|| -> Result<(), Box<dyn std::error::Error>> {
         for algorithm in [
             SignatureAlgorithm::RsaPkcs1v15Sha256,
@@ -191,6 +193,18 @@ fn non_exportable_rsa_and_ecdsa_keys_use_the_shared_contract(
             let der = certificate.to_der()?;
             let mut provider = Pkcs11Key::new(&module, &session, private, &der)?;
             let signing_key: &mut dyn SigningKey = &mut provider;
+            for mode in [ContentMode::Attached, ContentMode::Detached] {
+                let encoded = sign(
+                    signing_key,
+                    MESSAGE,
+                    SigningOptions {
+                        algorithm,
+                        mode,
+                        signing_time: std::time::SystemTime::now(),
+                    },
+                )?;
+                cades.push((certificate.clone(), encoded, mode));
+            }
             produced.push((
                 certificate.clone(),
                 signing_key.sign(algorithm, SigningInput::Message(MESSAGE))?,
@@ -242,6 +256,15 @@ fn non_exportable_rsa_and_ecdsa_keys_use_the_shared_contract(
     session.close()?;
     operation?;
     module.finalize()?;
+    for (certificate, encoded, mode) in cades {
+        let detached = (mode == ContentMode::Detached).then_some(MESSAGE);
+        assert!(verify_cades_with_cli(&certificate, &encoded, detached));
+        assert!(!verify_cades_with_cli(
+            &certificate,
+            &encoded,
+            Some(b"modified")
+        ));
+    }
     for (certificate, signature) in produced {
         assert!(verify_with_cli(&certificate, &signature, MESSAGE));
         assert!(!verify_with_cli(&certificate, &signature, b"modified"));

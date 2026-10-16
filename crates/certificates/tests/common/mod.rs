@@ -80,3 +80,41 @@ pub fn verify_with_cli(certificate: &X509, signature: &Signature, message: &[u8]
         .expect("OpenSSL CLI is required for provider integration tests");
     output.status.success()
 }
+
+pub fn verify_cades_with_cli(certificate: &X509, encoded: &[u8], detached: Option<&[u8]>) -> bool {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("signature.der"), encoded).unwrap();
+    fs::write(
+        directory.path().join("trust.pem"),
+        certificate.to_pem().unwrap(),
+    )
+    .unwrap();
+    let mut command = Command::new("openssl");
+    command.current_dir(directory.path()).args([
+        "cms",
+        "-verify",
+        "-cades",
+        "-binary",
+        "-inform",
+        "DER",
+        "-in",
+        "signature.der",
+        "-CAfile",
+        "trust.pem",
+        "-no-CApath",
+        "-no-CAstore",
+        "-partial_chain",
+        "-purpose",
+        "any",
+        "-out",
+        "verified.bin",
+    ]);
+    if let Some(message) = detached {
+        fs::write(directory.path().join("document.bin"), message).unwrap();
+        command.args(["-content", "document.bin"]);
+    }
+    let result = command
+        .output()
+        .expect("OpenSSL CLI is required for CAdES tests");
+    result.status.success() && fs::read(directory.path().join("verified.bin")).unwrap() == MESSAGE
+}
