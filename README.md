@@ -102,12 +102,14 @@ The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3`
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
 ```sh
-cargo test --locked -p firmica-signing -p firmica-certificates --features pkcs11
-cargo doc --locked -p firmica-signing -p firmica-certificates --features pkcs11 --no-deps
+cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades --features pkcs11
+cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades --features pkcs11 --no-deps
+# Java 17+; downloads checksum-pinned, test-only AutoFirma 1.9.1 reference jars:
+python3 tests/interop/cades_reference.py
 # With SoftHSM and softhsm2-util installed; use your platform's module path:
 FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
 ```
 
-The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. No existing certificate store is opened. API contracts and import limitations are documented with rustdoc.
+The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. CAdES tests verify attached and detached signatures with the OpenSSL CLI, check certificate binding, and reject modified content. The token test also exercises CAdES encoding. No existing certificate store is opened. API contracts and import limitations are documented with rustdoc.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
