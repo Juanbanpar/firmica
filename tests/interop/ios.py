@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import platform
 import plistlib
+import shlex
 import shutil
 import subprocess
 import threading
@@ -18,7 +19,14 @@ SOURCE = Path(__file__).with_name("ios") / "InvocationTests.swift"
 
 
 def run(*args, timeout=60):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    print("+ " + shlex.join(args), flush=True)
+    try:
+        return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for output in (error.stdout, error.stderr):
+            if output:
+                print(output.decode(errors="replace") if isinstance(output, bytes) else output, flush=True)
+        raise
 
 
 def test_project(directory, origin):
@@ -133,7 +141,7 @@ def main():
     try:
         run("xcrun", "simctl", "boot", device)
         run("xcrun", "simctl", "bootstatus", device, "-b", timeout=180)
-        run("xcrun", "simctl", "install", device, str(args.app.resolve()))
+        run("xcrun", "simctl", "install", device, str(args.app.resolve()), timeout=180)
         project_dir = args.output / "project"
         if project_dir.exists():
             shutil.rmtree(project_dir)
@@ -162,6 +170,17 @@ def main():
                   "scope": "simulator invocation and review; no signing, intermediate services, browser return or physical-device proof"}
         result.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report))
+    except Exception:
+        # Preserve setup/service evidence before deleting the disposable simulator.
+        with (args.output / "simulator.log").open("w") as log:
+            try:
+                subprocess.run([
+                    "xcrun", "simctl", "spawn", device, "log", "show", "--last", "5m",
+                    "--style", "compact", "--predicate", 'process == "installd" OR process == "SpringBoard"',
+                ], stdout=log, stderr=subprocess.STDOUT, timeout=30)
+            except subprocess.TimeoutExpired:
+                log.write("\nSimulator log collection timed out.\n")
+        raise
     finally:
         server.shutdown()
         server.server_close()
