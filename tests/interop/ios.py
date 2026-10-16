@@ -148,11 +148,11 @@ def main():
                 "-resultBundlePath", str(bundle.resolve()), "-parallel-testing-enabled", "NO",
                 "-testLanguage", "en", "-testRegion", "US",
             ], stdout=log, stderr=subprocess.STDOUT, timeout=480)
+        run("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
+            "--output-path", str(args.output / "attachments"))
         if completed.returncode:
             print((args.output / "xcodebuild.log").read_text()[-18000:])
             raise RuntimeError("XCTest invocation checks failed")
-        run("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
-            "--output-path", str(args.output / "attachments"))
         report = {"platform": "iOS Simulator", "runtime": runtime, "device": "iPhone 16",
                   "xcode": run("xcodebuild", "-version"),
                   "applicationSha256": hashlib.sha256((args.app / info["CFBundleExecutable"]).read_bytes()).hexdigest(),

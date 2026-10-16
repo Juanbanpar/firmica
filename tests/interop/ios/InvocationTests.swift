@@ -15,14 +15,15 @@ final class InvocationTests: XCTestCase {
         let link = safari.links[label]
         XCTAssertTrue(link.waitForExistence(timeout: 20), safari.debugDescription)
         link.tap()
-        let safariOpen = safari.alerts.buttons["Open"]
+        // Safari's SFDialogView exposes buttons outside the alerts container.
+        let safariOpen = safari.buttons["Open"]
         if safariOpen.waitForExistence(timeout: 3) {
             safariOpen.tap()
         } else {
             let systemOpen = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Open"]
             if systemOpen.exists { systemOpen.tap() }
         }
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), safari.debugDescription)
     }
 
     private func capture(_ name: String) {
