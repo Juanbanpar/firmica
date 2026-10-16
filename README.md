@@ -14,7 +14,7 @@ cd packages/desktop
 dx serve --platform desktop
 ```
 
-Native applications and shared UI live in `packages/desktop`, `packages/mobile`, `packages/web`, and `packages/ui`. Reusable protocol, review-state, and transport libraries live in `crates/`.
+Native applications and shared UI live in `packages/desktop`, `packages/mobile`, `packages/web`, and `packages/ui`. Reusable Rust libraries live in `crates/`.
 
 ```sh
 # From the workspace root:
@@ -98,5 +98,16 @@ python3 tests/interop/ios.py --app target/dx/mobile/debug/ios/Mobile.app
 The iOS test creates a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
 
 The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3` (RUSTSEC-2026-0097), which have known unsoundness advisories. Run `cargo audit --deny unsound` to check dependencies.
+
+The signing libraries can be tested separately from the applications. They require OpenSSL development headers/libraries and the OpenSSL CLI. Enable `vendored-openssl` to build the native library from source; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building), including a C toolchain, Perl and Make (or MSVC/NMake on Windows).
+
+```sh
+cargo test --locked -p firmica-signing -p firmica-certificates --features pkcs11
+cargo doc --locked -p firmica-signing -p firmica-certificates --features pkcs11 --no-deps
+# With SoftHSM and softhsm2-util installed; use your platform's module path:
+FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
+```
+
+The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. No existing certificate store is opened. API contracts and import limitations are documented with rustdoc.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
