@@ -88,6 +88,15 @@ The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines
 
 For native Android invocation checks, build a debug APK with `dx build --locked --package mobile --platform android --target x86_64-linux-android`, then run `python3 tests/interop/android.py --serial emulator-5554 --apk /path/to/app-debug.apk`. The script refuses physical devices. Add `--browser org.mozilla.firefox` to check browser links with Firefox already installed in the emulator.
 
+On macOS with Xcode 16.4 and the iOS 18.5 Simulator runtime, run:
+
+```sh
+dx build --locked --package mobile --platform ios --target aarch64-apple-ios-sim
+python3 tests/interop/ios.py --app target/dx/mobile/debug/ios/Mobile.app
+```
+
+The iOS test creates a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
+
 The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3` (RUSTSEC-2026-0097), which have known unsoundness advisories. Run `cargo audit --deny unsound` to check dependencies.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
