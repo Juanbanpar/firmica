@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use ui::Navbar;
 use views::{Diagnostics, Home};
 
+mod invocation;
 mod views;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -18,12 +19,15 @@ enum Route {
 const MAIN_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
-    dioxus::launch(App);
+    if let Err(error) = invocation::launch(App) {
+        eprintln!("Firmica: {error}");
+        std::process::exit(1);
+    }
 }
 
 #[component]
 fn App() -> Element {
-    use_context_provider(firmica_core::Inbox::default);
+    use_context_provider(invocation::inbox);
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 

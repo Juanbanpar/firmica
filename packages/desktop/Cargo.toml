@@ -2,11 +2,26 @@
 name = "desktop"
 version = "0.1.0"
 edition = "2021"
+description = "Firmica protocol feasibility client; signing is unavailable"
+
+[[bin]]
+name = "firmica"
+path = "src/main.rs"
 
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
 ui = { workspace = true }
+
 firmica-core.workspace = true
+firmica-protocol.workspace = true
+
+firmica-transport.workspace = true
+tokio.workspace = true
+async-channel = "2"
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["process"] }
 
 [features]
 default = ["desktop"]

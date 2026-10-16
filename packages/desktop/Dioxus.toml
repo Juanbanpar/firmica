@@ -1,0 +1,12 @@
+[application]
+name = "Firmica"
+
+[bundle]
+identifier = "org.firmica.client"
+publisher = "Firmica contributors"
+
+[deep_links]
+schemes = ["afirma"]
+
+[bundle.deb]
+desktop_template = "assets/firmica.desktop.hbs"
