@@ -8,6 +8,8 @@ members = [
     "crates/protocol",
     "crates/core",
     "crates/transport",
+    "crates/signing",
+    "crates/certificates",
 ]
 
 [workspace.dependencies]
@@ -19,6 +21,11 @@ ui = { path = "packages/ui" }
 firmica-protocol = { path = "crates/protocol" }
 firmica-core = { path = "crates/core" }
 firmica-transport = { path = "crates/transport" }
+firmica-signing = { path = "crates/signing" }
+firmica-certificates = { path = "crates/certificates" }
+openssl = "0.10.81"
+secrecy = "0.10.3"
+cryptoki = "0.12.1"
 thiserror = "2"
 percent-encoding = "2.3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }

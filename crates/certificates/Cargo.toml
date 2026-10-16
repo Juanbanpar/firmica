@@ -1,0 +1,21 @@
+[package]
+name = "firmica-certificates"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+pkcs11 = ["dep:cryptoki"]
+# Useful for build hosts without a compatible system OpenSSL; not a release-packaging policy.
+vendored-openssl = ["openssl/vendored"]
+
+[dependencies]
+firmica-signing.workspace = true
+openssl.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+cryptoki = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+der = { version = "0.7", features = ["std"] }
