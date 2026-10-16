@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Install Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable test --locked -p firmica-protocol -p firmica-core -p firmica-transport
+      - run: cargo +stable clippy --locked -p firmica-protocol -p firmica-core -p firmica-transport --all-targets -- -D warnings
+      - name: Install verified Dioxus CLI 0.7.10
+        shell: python
+        run: |
+          import hashlib, io, os, platform, subprocess, urllib.request, zipfile
+          from pathlib import Path
+
+          archives = {
+              ("Linux", "x86_64"): ("dx-x86_64-unknown-linux-gnu.zip", "61d2132eaf3cd70ca1ac89a7ecc891fcd770e917a5869e29d465459371b26c83"),
+              ("Windows", "amd64"): ("dx-x86_64-pc-windows-msvc.zip", "45eb4f87b7f86fdba8508ee7e0ef1f9e13cf8f2ffcc6a2d5858d0e8ea7dd1531"),
+              ("Darwin", "arm64"): ("dx-aarch64-apple-darwin.zip", "4aff37aea6b8fbce7bee3f8bbbea1bd71f60e0fa09537f35759f6494da861e37"),
+              ("Darwin", "x86_64"): ("dx-x86_64-apple-darwin.zip", "b2751a700b8b02f85fcdd8fe6e63c20876b4af9f0921c5be4c703e6f872b67ee"),
+          }
+          name, expected = archives[(platform.system(), platform.machine().lower())]
+          url = "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/" + name
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise RuntimeError("Dioxus archive checksum mismatch")
+          install = Path(os.environ["RUNNER_TEMP"]) / "dioxus-bin"
+          install.mkdir(exist_ok=True)
+          executable = install / ("dx.exe" if platform.system() == "Windows" else "dx")
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              executable.write_bytes(archive.read(executable.name))
+          executable.chmod(0o755)
+          with open(os.environ["GITHUB_PATH"], "a") as output:
+              output.write(str(install) + "\n")
+          subprocess.run([str(executable), "--version"], check=True)
+      - run: dx build --locked --package desktop --platform desktop
+      # Generates mobile assets and checks its host entry point; not a native mobile build.
+      - run: dx build --locked --package mobile --platform desktop --features mobile
+      - run: cargo +stable test --locked -p desktop -p mobile
+      - run: cargo +stable clippy --locked -p ui -p desktop -p mobile --all-targets -- -D warnings
+      - run: cargo +stable doc --locked -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
+
+  linux-invocation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool desktop-file-utils libnss3-tools dbus-daemon
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - name: Install verified Dioxus CLI 0.7.10
+        shell: bash
+        run: |
+          curl --fail --location https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz --output dx.tar.gz
+          printf '4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7  dx.tar.gz\n' | sha256sum --check
+          tar -xzf dx.tar.gz -C "$HOME/.cargo/bin" dx
+          rm dx.tar.gz
+          dx --version
+      - name: Build Debian feasibility bundle
+        working-directory: packages/desktop
+        run: dx bundle --locked --platform desktop --release --package-types deb
+      - run: dx build --locked --package web --platform web
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox
+      - run: cargo +stable build --locked -p firmica-transport --example probe
+      - run: npm run test:autoscript
+      - run: npm run test:desktop
+      - name: Verify extracted Debian payload
+        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
+      - run: npm run test:native-interop
+      - run: npm run test:os-handler
+      - run: npm run test:lifecycle
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      # RUSTSEC-2024-0429 and RUSTSEC-2026-0097 currently fail this gate.
+      - run: cargo audit --deny unsound
