@@ -8,6 +8,40 @@ permissions:
   contents: read
 
 jobs:
+  signing:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            features: pkcs11
+          - os: macos-latest
+            features: pkcs11
+          - os: windows-latest
+            features: pkcs11,vendored-openssl
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Install Linux signing test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
+      - name: Verify native test tooling
+        run: openssl version
+      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates --features ${{ matrix.features }}
+      - name: Exercise non-exportable SoftHSM keys
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          module=$(dpkg -L libsofthsm2 | rg '/libsofthsm2\.so$' | head -1)
+          test -n "$module"
+          FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
+      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates --features ${{ matrix.features }} --all-targets -- -D warnings
+      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates --features ${{ matrix.features }} --no-deps
+
   rust:
     strategy:
       fail-fast: false
