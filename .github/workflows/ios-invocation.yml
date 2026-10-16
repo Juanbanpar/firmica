@@ -1,0 +1,82 @@
+name: iOS invocation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ios-invocation.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'packages/mobile/**'
+      - 'packages/ui/**'
+      - 'tests/interop/ios.py'
+      - 'tests/interop/ios/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ios-invocation.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'packages/mobile/**'
+      - 'packages/ui/**'
+      - 'tests/interop/ios.py'
+      - 'tests/interop/ios/**'
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install stable Rust and simulator target
+        run: rustup toolchain install stable --profile minimal --target aarch64-apple-ios-sim
+      - name: Install verified Dioxus CLI 0.7.10
+        shell: python
+        run: |
+          import hashlib, io, os, platform, subprocess, urllib.request, zipfile
+          from pathlib import Path
+
+          archives = {
+              ("Linux", "x86_64"): ("dx-x86_64-unknown-linux-gnu.zip", "61d2132eaf3cd70ca1ac89a7ecc891fcd770e917a5869e29d465459371b26c83"),
+              ("Windows", "amd64"): ("dx-x86_64-pc-windows-msvc.zip", "45eb4f87b7f86fdba8508ee7e0ef1f9e13cf8f2ffcc6a2d5858d0e8ea7dd1531"),
+              ("Darwin", "arm64"): ("dx-aarch64-apple-darwin.zip", "4aff37aea6b8fbce7bee3f8bbbea1bd71f60e0fa09537f35759f6494da861e37"),
+              ("Darwin", "x86_64"): ("dx-x86_64-apple-darwin.zip", "b2751a700b8b02f85fcdd8fe6e63c20876b4af9f0921c5be4c703e6f872b67ee"),
+          }
+          name, expected = archives[(platform.system(), platform.machine().lower())]
+          url = "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/" + name
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise RuntimeError("Dioxus archive checksum mismatch")
+          install = Path(os.environ["RUNNER_TEMP"]) / "dioxus-bin"
+          install.mkdir(exist_ok=True)
+          executable = install / ("dx.exe" if platform.system() == "Windows" else "dx")
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              executable.write_bytes(archive.read(executable.name))
+          executable.chmod(0o755)
+          with open(os.environ["GITHUB_PATH"], "a") as output:
+              output.write(str(install) + "\n")
+          subprocess.run([str(executable), "--version"], check=True)
+      - name: Build native iOS Simulator app
+        run: dx build --locked --package mobile --platform ios --target aarch64-apple-ios-sim
+      - name: Test Safari invocation and review
+        run: python3 tests/interop/ios.py --app target/dx/mobile/debug/ios/Mobile.app
+      - name: Save iOS test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-invocation
+          path: |
+            .test-artifacts/ios/result.json
+            .test-artifacts/ios/Info.plist
+            .test-artifacts/ios/xcodebuild.log
+            .test-artifacts/ios/Invocation.xcresult
+            .test-artifacts/ios/attachments
+          if-no-files-found: warn
