@@ -1,0 +1,7 @@
+@layer base {
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
+  @media (prefers-color-scheme: dark) { body { background: #0f172a; color: #f1f5f9; } }
+  button { cursor: pointer; }
+  a { text-underline-offset: 0.2em; text-decoration: underline; }
+}

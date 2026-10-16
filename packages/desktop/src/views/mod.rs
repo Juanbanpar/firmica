@@ -1,5 +1,9 @@
 mod home;
 pub use home::Home;
 
-mod blog;
-pub use blog::Blog;
+#[component]
+pub fn Diagnostics() -> dioxus::prelude::Element {
+    dioxus::prelude::rsx! { ui::Diagnostics {} }
+}
+
+use dioxus::prelude::*;
