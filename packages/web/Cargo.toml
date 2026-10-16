@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
 ui = { workspace = true }
+
 firmica-core.workspace = true
+firmica-protocol.workspace = true
 
 [features]
 default = ["web"]

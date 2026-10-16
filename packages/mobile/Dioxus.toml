@@ -1,0 +1,17 @@
+[application]
+name = "Firmica"
+android_main_activity = "android/MainActivity.kt"
+android_manifest = "android/AndroidManifest.xml"
+# CLI 0.7.10 reads separate minimums for native compilation and Gradle.
+android_min_sdk_version = 28
+
+[bundle]
+identifier = "org.firmica.client"
+publisher = "Firmica contributors"
+
+[deep_links]
+schemes = ["afirma"]
+
+[android]
+lib_name = "main"
+min_sdk = 28

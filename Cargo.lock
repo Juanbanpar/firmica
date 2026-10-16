@@ -3392,8 +3392,11 @@ dependencies = [
 name = "mobile"
 version = "0.1.0"
 dependencies = [
+ "cesu8",
  "dioxus",
  "firmica-core",
+ "firmica-protocol",
+ "jni 0.21.1",
  "ui",
 ]
 
@@ -6058,6 +6061,7 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "firmica-core",
+ "firmica-protocol",
  "ui",
 ]
 

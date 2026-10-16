@@ -17,10 +17,10 @@ dioxus = { version = "=0.7.10" }
 ui = { path = "packages/ui" }
 
 firmica-protocol = { path = "packages/protocol" }
+firmica-core = { path = "packages/core" }
+firmica-transport = { path = "packages/transport" }
 thiserror = "2"
 percent-encoding = "2.3"
-
-firmica-core = { path = "packages/core" }
-
-firmica-transport = { path = "packages/transport" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+jni = "0.21"
+cesu8 = "1.1"
