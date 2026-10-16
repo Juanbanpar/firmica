@@ -1,0 +1,13 @@
+[package]
+name = "firmica-transport"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+firmica-protocol.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = "0.30"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
