@@ -37,7 +37,7 @@ jobs:
           "OPENSSL_DIR=$root" >> $env:GITHUB_ENV
           "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
           "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
-      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades --features pkcs11
+      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker --features pkcs11
       - name: Compare CAdES with AutoFirma and verify with SpongyCastle
         if: runner.os == 'Linux'
         run: python3 tests/interop/cades_reference.py
@@ -48,8 +48,8 @@ jobs:
           module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
           test -n "$module"
           FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
-      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates -p firmica-cades --features pkcs11 --all-targets -- -D warnings
-      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades --features pkcs11 --no-deps
+      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker --features pkcs11 --all-targets -- -D warnings
+      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker --features pkcs11 --no-deps
 
   rust:
     strategy:
