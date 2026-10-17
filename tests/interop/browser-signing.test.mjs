@@ -122,10 +122,20 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount']) {
       xdo(['key','ctrl+l']); xdo(['key','ctrl+a']);
       execFileSync('xclip',['-selection','clipboard'],{env:xenv,input:path.join(dir,'signer.p12'),stdio:['pipe','ignore','ignore']});
       xdo(['key','ctrl+v']); await new Promise(resolve => setTimeout(resolve,200)); xdo(['key','alt+o']);
-      await until(async () => await native.evaluate('!!document.querySelector("#sign-certificate").files[0]'));
+      await until(() => {
+        try { return !xdo(['search','--onlyvisible','--class','[Zz]enity']).split('\n').includes(window); }
+        catch { return true; }
+      });
+      await until(async () => await native.evaluate(`document.querySelector('#sign-certificate').files[0]?.name === ${JSON.stringify(path.join(dir,'signer.p12'))}`));
       await native.evaluate(`(() => {const input = document.querySelector('#sign-password'); input.value = ${JSON.stringify(password)}; input.dispatchEvent(new Event('input',{bubbles:true})); return true;})()`);
+      // File metadata reaches Rust asynchronously after the DOM file list changes.
+      await until(async () => await native.evaluate('document.querySelector("#sign-prepare")?.disabled === false'));
       await click('#sign-prepare');
-      await until(async () => await native.evaluate('!!document.querySelector("#sign-subject")'));
+      const opening = await until(async () => {
+        const state = await native.evaluate('({ready:!!document.querySelector("#sign-subject"), failed:document.querySelector("#sign-status")?.getAttribute("role") === "alert", message:document.querySelector("#sign-status")?.textContent})');
+        return state.ready || state.failed ? state : undefined;
+      });
+      assert.equal(opening.ready,true,opening.message);
       const signer = openssl(['x509','-in','signer.pem','-outform','DER']);
       assert.equal(await native.evaluate('document.querySelector("#sign-document-hash").textContent'),sha256(content));
       assert.equal(await native.evaluate('document.querySelector("#sign-fingerprint").textContent'),sha256(signer));
