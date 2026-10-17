@@ -1992,6 +1992,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "firmica-key-worker"
+version = "0.1.0"
+dependencies = [
+ "der",
+ "firmica-cades",
+ "firmica-certificates",
+ "firmica-signing",
+ "openssl",
+ "rustix",
+ "secrecy",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "firmica-protocol"
 version = "0.1.0"
 dependencies = [
