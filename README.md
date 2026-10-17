@@ -102,8 +102,8 @@ The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3`
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
 ```sh
-cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker --features pkcs11
-cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker --features pkcs11 --no-deps
+cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11
+cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
 # Java 17+; downloads checksum-pinned, test-only AutoFirma 1.9.1 reference jars:
 python3 tests/interop/cades_reference.py
 # With SoftHSM and softhsm2-util installed; use your platform's module path:
@@ -113,5 +113,7 @@ FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-cer
 The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. CAdES tests verify attached and detached signatures with the OpenSSL CLI, check certificate binding, and reject modified content. The token test also exercises CAdES encoding. No existing certificate store is opened.
 
 The key worker keeps unlocked PKCS#12 keys in a separate Linux process with CPU, address-space and IPC deadline limits. Its tests cover import, CAdES signing, process termination and cleanup; they take about 30 seconds. Imports on other platforms are rejected. API contracts and import limitations are documented with rustdoc.
+
+`firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. These library APIs are not connected to the application controls.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
