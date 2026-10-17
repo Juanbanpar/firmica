@@ -66,9 +66,10 @@ async function lifetime(asynchronous) {
     }
     await connect();
     const submitted = performance.now();
-    await page.evaluate(session => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj`),session);
+    await page.evaluate(({session,asynchronous}) => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj${asynchronous ? '&format=CAdES&algorithm=SHA256withRSA' : ''}`),{session,asynchronous});
     await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
     if(asynchronous) {
+      assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'asynchronous review must use the signing form');
       await page.waitForFunction(() => window.replies.includes('#wait'));
       await page.evaluate(() => window.reviewSocket.close());
       await page.waitForFunction(() => window.reviewSocket.readyState === WebSocket.CLOSED);
@@ -80,20 +81,23 @@ async function lifetime(asynchronous) {
     } else {
       await page.waitForFunction(() => window.replies.includes('CANCEL'),null,{timeout:75000});
     }
-    await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes('caducado'),130000);
+    const expiredStatus = asynchronous ? '#browser-status' : '#review-status';
+    await until(async () => (await native.evaluate(`document.querySelector("${expiredStatus}")?.textContent`))?.includes('caducado'),130000);
     const elapsed = (performance.now() - (asynchronous ? started : submitted)) / 1000;
     const deadline = asynchronous ? 120 : 60;
     assert.ok(elapsed >= deadline - 5 && elapsed <= deadline + 15,
       `review expired after ${elapsed}s; expected approximately ${deadline}s`);
     assert.equal(await native.evaluate('document.querySelector("#request-operation")'),null);
     assert.equal(await native.evaluate('document.querySelectorAll("#reject-request, #acknowledge-request").length'),0);
-    await native.evaluate('document.querySelector("header button").click(); true');
-    await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes('request has expired'));
+    if (!asynchronous) {
+      await native.evaluate('document.querySelector("header button").click(); true');
+    }
+    await until(async () => (await native.evaluate(`document.querySelector("${expiredStatus}")?.textContent`))?.includes('request has expired'));
 
     execFileSync(binary,['afirma://cosign?ver=4'],{env});
     await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "cosign"'));
     await native.evaluate('document.querySelector("#acknowledge-request").click(); true');
-    await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes('not implemented'));
+    await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes(asynchronous ? 'no está implementada' : 'not implemented'));
     const report = {mode:asynchronous ? 'async listener expiry' : 'synchronous review timeout',
       protocol:4,jvc:asynchronous ? 4 : 3,request:'sign',certificateBackend:null,
       platform:process.platform,browser:browser.version(),elapsedSeconds:elapsed,

@@ -2,7 +2,7 @@
 
 Rust electronic-signature client using Dioxus 0.7.10 and Tailwind CSS 4, targeting existing AutoFirma browser integrations.
 
-The Linux desktop application signs local documents in CAdES format using PKCS#12 certificates. Browser `afirma://` invocations and local TLS WebSocket requests support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
+The Linux desktop application signs local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires an explicitly configured local TLS WebSocket listener and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
 
 ## Build
 
@@ -56,7 +56,7 @@ On Linux, use the packaged executable with a quoted URI:
 ./target/dx/firmica/release/linux/app/firmica 'afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat=c3ludGhldGlj'
 ```
 
-Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Review cannot sign anything: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
+Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
 To enable the local WSS listener, supply a TLS certificate/key and an exact allowed browser origin to the first process:
 
@@ -66,6 +66,10 @@ To enable the local WSS listener, supply a TLS certificate/key and an exact allo
   --origin http://127.0.0.1:8080 \
   'afirma://websocket?v=4&jvc=4&ports=49152,49153,49154&idsession=0123456789abcdef'
 ```
+
+On Linux, protocol 4.x WSS `sign` requests can return a signature after certificate selection and explicit approval. Supported requests contain an inline Base64 document, `format=CAdES`, and `algorithm=SHA256withRSA` or `SHA256withECDSA` (P-256 only). The only supported extra property is `mode=explicit` (detached, also the default) or `mode=implicit` (attached). The entire request must fit the 64 KiB URI limit. Only PKCS#12 selection is supported; a request may omit the store or specify `ksb64` encoding `PKCS12`. Firefox’s AutoScript default requests its Mozilla store, so a PKCS#12 integration must call `AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12)`. Sticky certificate reuse, other certificate stores, remote document URLs, precomputed digests, signature policies and unknown options are unsupported. Other operations retain review/cancellation behavior.
+
+The signing screen fixes the document and signing choices from the request, shows their hash and the selected certificate, and warns that the request origin is unauthenticated. **Sign and send to browser** returns the reviewed certificate and CMS result to that session after worker cleanup; no destination file is written. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
 
 Browser certificate trust and URI-handler registration are not configured automatically. Do not install test certificates globally. Chromium tests pin one ephemeral public key. The Firefox OS-handler test trusts an ephemeral CA only in its disposable profile and checks that a fresh profile rejects it. Tests use an isolated XDG association without replacing the user's default handler.
 
@@ -92,15 +96,17 @@ cargo build -p firmica-transport --example probe
 npm run test:autoscript
 npm run test:desktop
 npm run test:signing
+npm run test:browser-signing
 # After building the Debian bundle above (x86-64):
 FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
 FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:signing
+FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:browser-signing
 npm run test:native-interop
 npm run test:os-handler
 npm run test:lifecycle
 ```
 
-The signing window test additionally needs `zenity`, `openbox`, `xclip`, and `dbus-run-session`. It uses a disposable XDG profile, session bus, clipboard, and Xvfb display.
+The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify RSA/P-256 output with OpenSSL, and check that worker failure and navigation cancellation return no signature.
 
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 

@@ -7,7 +7,8 @@
     "test:os-handler": "FIRMICA_OS_HANDLER=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' node --test tests/interop/autoscript.test.mjs",
     "test:native-interop": "FIRMICA_NATIVE_INTEROP=1 node --test tests/interop/autoscript.test.mjs",
     "test:desktop": "node --test tests/interop/desktop.test.mjs",
-    "test:autoscript": "node --test tests/interop/autoscript.test.mjs"
+    "test:autoscript": "node --test tests/interop/autoscript.test.mjs",
+    "test:browser-signing": "node --test tests/interop/browser-signing.test.mjs"
   },
   "devDependencies": { "playwright": "1.64.1" }
 }

@@ -4,7 +4,7 @@ use firmica_core::{Inbox, Review, ReviewOutcome, ReviewState};
 
 /// Shared screen, with no cryptographic or transport logic.
 #[component]
-pub fn InvocationReview() -> Element {
+pub fn InvocationReview(on_pending: Option<EventHandler<bool>>) -> Element {
     let inbox = use_context::<Inbox>();
     let mut review = use_signal(Review::default);
     let mut reply = use_signal(|| None::<async_channel::Sender<ReviewOutcome>>);
@@ -21,6 +21,9 @@ pub fn InvocationReview() -> Element {
                 {
                     reply.set(None);
                     review.write().expire();
+                    if let Some(handler) = on_pending {
+                        handler.call(false);
+                    }
                 }
                 if incoming
                     .reply
@@ -30,6 +33,9 @@ pub fn InvocationReview() -> Element {
                     continue;
                 }
                 if review.write().receive(incoming.request) {
+                    if let Some(handler) = on_pending {
+                        handler.call(true);
+                    }
                     reply.set(incoming.reply.clone());
                     if let Some(sender) = incoming.reply {
                         spawn(async move {
@@ -41,6 +47,9 @@ pub fn InvocationReview() -> Element {
                             if current {
                                 reply.set(None);
                                 review.write().expire();
+                                if let Some(handler) = on_pending {
+                                    handler.call(false);
+                                }
                             }
                         });
                     }
@@ -54,15 +63,20 @@ pub fn InvocationReview() -> Element {
     let state = review.read().state;
     let es = spanish();
     let mut decide = move |outcome| {
+        let rejected = matches!(outcome, ReviewOutcome::Rejected);
+        if let Some(handler) = on_pending {
+            handler.call(false);
+        }
         if let Some(sender) = reply.write().take() {
             if sender.try_send(outcome).is_err() {
                 review.write().expire();
                 return;
             }
         }
-        match outcome {
-            ReviewOutcome::Rejected => review.write().reject(),
-            ReviewOutcome::Unsupported => review.write().acknowledge(),
+        if rejected {
+            review.write().reject();
+        } else {
+            review.write().acknowledge();
         }
     };
     rsx! {
@@ -138,7 +152,7 @@ pub fn Navbar(children: Element) -> Element {
 pub fn Diagnostics() -> Element {
     rsx! { main { class: "mx-auto max-w-3xl p-6 sm:p-12",
         h1 { class: "mb-4 text-2xl font-semibold", "Diagnostics / Diagnóstico" }
-        p { "External URI and WSS requests support review and cancellation only. Standalone document signing is available in the Linux desktop application." }
+        p { "The Linux desktop supports local CAdES signing and inline CAdES signing over an explicitly configured TLS WebSocket session. Bare URI requests and unsupported operations permit review and cancellation only." }
         p { class: "mt-4", "Certificate trust, revocation and legal qualification are not validated. / No se validan la confianza del certificado, su revocación ni su cualificación legal." }
     } }
 }

@@ -1,7 +1,9 @@
+use super::home::{BrowserCompletion, BrowserOperation};
 use crate::signing::{packaged_worker, Error, Prepared};
 use dioxus::prelude::*;
 use firmica_cades::ContentMode;
 use firmica_core::signing::ApprovalError;
+use firmica_core::ReviewOutcome;
 use firmica_key_worker::WorkerError;
 use firmica_signing::SignatureAlgorithm;
 use firmica_validation::Restriction;
@@ -50,7 +52,10 @@ struct Details {
 }
 
 #[component]
-pub fn LocalSigning() -> Element {
+pub fn LocalSigning(
+    browser: Option<Signal<Option<BrowserOperation>>>,
+    completion: Option<Signal<Option<BrowserCompletion>>>,
+) -> Element {
     let mut es = use_signal(|| true);
     let mut document = use_signal(|| None::<PathBuf>);
     let mut certificate = use_signal(|| None::<PathBuf>);
@@ -65,7 +70,38 @@ pub fn LocalSigning() -> Element {
     let cancelled = use_hook(|| Arc::new(AtomicBool::new(false)));
     let on_unmount = cancelled.clone();
     use_drop(move || on_unmount.store(true, Ordering::Release));
+    let expiry_cancellation = cancelled.clone();
+    use_future(move || {
+        let expiry_cancellation = expiry_cancellation.clone();
+        async move {
+            if let Some(mut browser) = browser {
+                let reply = browser
+                    .peek()
+                    .as_ref()
+                    .map(|operation| operation.reply.clone());
+                if let Some(reply) = reply {
+                    reply.closed().await;
+                    if browser
+                        .peek()
+                        .as_ref()
+                        .is_some_and(|current| current.reply.same_channel(&reply))
+                    {
+                        expiry_cancellation.store(true, Ordering::Release);
+                        prepared.set(None);
+                        if let Some(mut completion) = completion {
+                            completion.set(Some(BrowserCompletion::Expired));
+                        }
+                        browser.set(None);
+                    }
+                }
+            }
+        }
+    });
     let spanish = es();
+    let external = browser.is_some();
+    let browser_version =
+        browser.and_then(|browser| browser.read().as_ref().map(|operation| operation.version));
+    let reject_cancellation = cancelled.clone();
     let details = prepared.read().as_ref().map(|pending| {
         let review = pending.review();
         let certificate = review.certificate();
@@ -84,11 +120,19 @@ pub fn LocalSigning() -> Element {
         }
     });
     let text = match &*status.read() {
-        Status::Idle => tr(
-            spanish,
-            "Selecciona un documento y un certificado PKCS#12.",
-            "Choose a document and a PKCS#12 certificate.",
-        )
+        Status::Idle => if external {
+            tr(
+                spanish,
+                "Selecciona un certificado PKCS#12 para revisar la solicitud.",
+                "Choose a PKCS#12 certificate to review the request.",
+            )
+        } else {
+            tr(
+                spanish,
+                "Selecciona un documento y un certificado PKCS#12.",
+                "Choose a document and a PKCS#12 certificate.",
+            )
+        }
         .to_owned(),
         Status::Opening => tr(
             spanish,
@@ -115,7 +159,32 @@ pub fn LocalSigning() -> Element {
                 h1 { class: "text-3xl font-semibold tracking-tight", {tr(spanish, "Firmar un documento", "Sign a document")} }
                 button { id: "sign-language", class: BUTTON, onclick: move |_| es.toggle(), if spanish { "English" } else { "Español" } }
             }
-            p { class: "mb-6", {tr(spanish, "Firma local CAdES. Las solicitudes del navegador no autorizan esta operación.", "Local CAdES signing. Browser requests do not authorize this operation.")} }
+            if external {
+                section { class: "mb-6 rounded border p-4",
+                    p { role: "alert", {tr(spanish, "Solicitud de navegador: el origen no está autenticado. La firma y el certificado elegido se enviarán a la sesión que solicitó la operación.", "Browser request: the origin is unauthenticated. The signature and selected certificate will be sent to the session that requested the operation.")} }
+                    dl { class: "my-3 grid grid-cols-2 gap-2",
+                        dt { {tr(spanish, "Operación", "Operation")} } dd { id: "request-operation", "sign" }
+                        dt { {tr(spanish, "Versión del protocolo", "Protocol version")} } dd { id: "request-version", "{browser_version.unwrap_or_default()}" }
+                    }
+                    button { id: "reject-request", class: BUTTON, disabled: busy(), onclick: move |_| {
+                        if busy() { return; }
+                        reject_cancellation.store(true, Ordering::Release);
+                        let reply = browser_reply(browser);
+                        let pending = prepared.write().take();
+                        busy.set(true);
+                        spawn(async move {
+                            let result = if let Some(pending) = pending {
+                                tokio::task::spawn_blocking(move || pending.cancel()).await.unwrap_or(Err(Error::Task))
+                            } else { Ok(()) };
+                            finish_browser(browser, completion, reply, ReviewOutcome::Rejected);
+                            if let Err(error) = result { status.set(Status::Failed(error)); }
+                            busy.set(false);
+                        });
+                    }, {tr(spanish, "Rechazar", "Reject")} }
+                }
+            } else {
+                p { class: "mb-6", {tr(spanish, "Firma local CAdES. Las solicitudes del navegador no autorizan esta operación.", "Local CAdES signing. Browser requests do not authorize this operation.")} }
+            }
             p { id: "sign-status", class: "mb-6", role: if failed { "alert" } else { "status" }, "{text}" }
             if let Some(Details { name, size, hash, subject, issuer, serial, fingerprint, start, end, chosen_algorithm, mode }) = details {
                 section { aria_label: tr(spanish, "Revisión de firma", "Signing review"),
@@ -152,7 +221,27 @@ pub fn LocalSigning() -> Element {
                                 if busy() || !acknowledged() { return; }
                                 busy.set(true);
                                 let cancellation = signing_cancellation.clone();
+                                let reply = browser_reply(browser);
                                 spawn(async move {
+                                    if external {
+                                        let pending = prepared.write().take();
+                                        if let Some(pending) = pending {
+                                            if reply.as_ref().is_none_or(|reply| reply.is_closed()) {
+                                                cancellation.store(true, Ordering::Release);
+                                            }
+                                            status.set(Status::Signing);
+                                            let result = tokio::task::spawn_blocking(move || pending.sign_for_browser(&cancellation)).await.unwrap_or(Err(Error::Task));
+                                            match result {
+                                                Ok(result) => finish_browser(browser, completion, reply, ReviewOutcome::Signed(result)),
+                                                Err(error) => {
+                                                    status.set(Status::Failed(error));
+                                                    finish_browser(browser, completion, reply, ReviewOutcome::Failed);
+                                                }
+                                            }
+                                        }
+                                        busy.set(false);
+                                        return;
+                                    }
                                     let filename = prepared.peek().as_ref().map(|pending| format!("{}.csig", pending.review().document_name())).unwrap_or_else(|| "signature.csig".into());
                                     let destination = rfd::AsyncFileDialog::new().set_file_name(filename).add_filter("CAdES", &["csig"]).save_file().await;
                                     if let Some(destination) = destination {
@@ -167,30 +256,37 @@ pub fn LocalSigning() -> Element {
                                     }
                                     busy.set(false);
                                 });
-                            }, {tr(spanish, "Firmar y guardar…", "Sign and save…")}
+                            }, if external { {tr(spanish, "Firmar y enviar al navegador", "Sign and send to browser")} }
+                            else { {tr(spanish, "Firmar y guardar…", "Sign and save…")} }
                         }
                         button { id: "sign-cancel", class: BUTTON, disabled: busy(), onclick: move |_| {
                             if busy() { return; }
                             let pending = prepared.write().take();
                             if let Some(pending) = pending {
                                 busy.set(true);
+                                let reply = browser_reply(browser);
                                 spawn(async move {
                                     let result = tokio::task::spawn_blocking(move || pending.cancel()).await.unwrap_or(Err(Error::Task));
                                     status.set(match result { Ok(()) => Status::Cancelled, Err(error) => Status::Failed(error) });
                                     acknowledged.set(false);
+                                    if external { finish_browser(browser, completion, reply, ReviewOutcome::Rejected); }
                                     busy.set(false);
                                 });
                             }
                         }, {tr(spanish, "Cancelar", "Cancel")} }
                     }
-                    p { class: "mt-4 text-sm", {tr(spanish, "Elige un nombre nuevo: no se reemplazan archivos existentes.", "Choose a new filename: existing files are not replaced.")} }
+                    if !external {
+                        p { class: "mt-4 text-sm", {tr(spanish, "Elige un nombre nuevo: no se reemplazan archivos existentes.", "Choose a new filename: existing files are not replaced.")} }
+                    }
                 }
             } else {
                 div { class: "space-y-5",
+                    if !external {
                     label { class: "block", {tr(spanish, "Documento (hasta 16 MiB)", "Document (up to 16 MiB)")}
                         input { id: "sign-document", class: FIELD, r#type: "file", disabled: busy(),
                             onchange: move |event| document.set(event.files().into_iter().next().map(|file| file.path())),
                         }
+                    }
                     }
                     label { class: "block", {tr(spanish, "Certificado PKCS#12 (hasta 8 MiB)", "PKCS#12 certificate (up to 8 MiB)")}
                         input { id: "sign-certificate", class: FIELD, r#type: "file", accept: ".p12,.pfx", disabled: busy(),
@@ -206,6 +302,7 @@ pub fn LocalSigning() -> Element {
                             }
                         }
                     }
+                    if !external {
                     label { class: "block", {tr(spanish, "Algoritmo", "Algorithm")}
                         select { id: "sign-algorithm", class: FIELD, disabled: busy(), value: if algorithm() == SignatureAlgorithm::RsaPkcs1v15Sha256 { "rsa" } else { "ec" },
                             onchange: move |event| algorithm.set(if event.value() == "ec" { SignatureAlgorithm::EcdsaP256Sha256 } else { SignatureAlgorithm::RsaPkcs1v15Sha256 }),
@@ -217,10 +314,16 @@ pub fn LocalSigning() -> Element {
                         input { id: "sign-attached", r#type: "checkbox", checked: attached(), disabled: busy(), onchange: move |event| attached.set(event.checked()) }
                         {tr(spanish, "Incluir el documento en la firma", "Embed the document in the signature")}
                     }
-                    button { id: "sign-prepare", class: BUTTON, disabled: busy() || document.read().is_none() || certificate.read().is_none(),
+                    }
+                    button { id: "sign-prepare", class: BUTTON, disabled: busy() || (!external && document.read().is_none()) || certificate.read().is_none(),
                         onclick: move |_| {
                             if busy() { return; }
-                            let (Some(document_path), Some(certificate_path)) = (document.peek().clone(), certificate.peek().clone()) else { return; };
+                            let Some(certificate_path) = certificate.peek().clone() else { return; };
+                            let document_path = document.peek().clone();
+                            let inline = browser.and_then(|browser| browser.peek().as_ref().filter(|operation| !operation.reply.is_closed()).map(|operation| (
+                                operation.request.document().to_vec(), operation.request.algorithm(), operation.request.mode()
+                            )));
+                            if external && inline.is_none() { return; }
                             let secret = std::mem::take(&mut *password.write());
                             *password_generation.write() += 1;
                             let algorithm = algorithm();
@@ -230,7 +333,11 @@ pub fn LocalSigning() -> Element {
                             spawn(async move {
                                 let result = tokio::task::spawn_blocking(move || {
                                     let worker = packaged_worker()?;
-                                    Prepared::open(&worker, &document_path, &certificate_path, secret, algorithm, mode)
+                                    if let Some((document, algorithm, mode)) = inline {
+                                        Prepared::open_document(&worker, "Browser document / Documento del navegador".into(), document, &certificate_path, secret, algorithm, mode)
+                                    } else {
+                                        Prepared::open(&worker, &document_path.ok_or(Error::ReadInput)?, &certificate_path, secret, algorithm, mode)
+                                    }
                                 }).await.unwrap_or(Err(Error::Task));
                                 match result {
                                     Ok(pending) => {
@@ -278,6 +385,7 @@ fn error_text(error: &Error, es: bool) -> String {
         Error::DestinationExists => tr(es, "El destino ya existe. No se ha reemplazado.", "The destination already exists. It was not replaced."),
         Error::Save => tr(es, "No se pudo guardar la firma. Comprueba el directorio de destino.", "Cannot save the signature. Check the destination directory."),
         Error::Cancelled => tr(es, "Operación cancelada.", "Operation cancelled."),
+        Error::Response => tr(es, "El resultado supera el límite del protocolo. No se ha enviado.", "The result exceeds the protocol limit. It was not sent."),
         Error::Task => tr(es, "La operación se interrumpió. No se ha confirmado una firma guardada.", "The operation was interrupted. A saved signature has not been confirmed."),
     }.to_owned()
 }
@@ -321,4 +429,47 @@ fn restriction_text(restriction: Restriction, es: bool) -> &'static str {
             "private-key usage period has ended",
         ),
     }
+}
+
+fn browser_reply(
+    browser: Option<Signal<Option<BrowserOperation>>>,
+) -> Option<async_channel::Sender<ReviewOutcome>> {
+    browser.and_then(|browser| {
+        browser
+            .peek()
+            .as_ref()
+            .map(|operation| operation.reply.clone())
+    })
+}
+
+fn finish_browser(
+    browser: Option<Signal<Option<BrowserOperation>>>,
+    completion: Option<Signal<Option<BrowserCompletion>>>,
+    reply: Option<async_channel::Sender<ReviewOutcome>>,
+    outcome: ReviewOutcome,
+) {
+    let (Some(mut browser), Some(reply)) = (browser, reply) else {
+        return;
+    };
+    if !browser
+        .peek()
+        .as_ref()
+        .is_some_and(|current| current.reply.same_channel(&reply))
+    {
+        return;
+    }
+    let result = match outcome {
+        ReviewOutcome::Signed(_) => BrowserCompletion::Sent,
+        ReviewOutcome::Rejected => BrowserCompletion::Rejected,
+        _ => BrowserCompletion::Failed,
+    };
+    let delivered = reply.try_send(outcome).is_ok();
+    if let Some(mut completion) = completion {
+        completion.set(Some(if delivered {
+            result
+        } else {
+            BrowserCompletion::Failed
+        }));
+    }
+    browser.set(None);
 }

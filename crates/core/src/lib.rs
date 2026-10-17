@@ -108,11 +108,17 @@ mod tests {
     }
 }
 
-/// A final response from the review-only UI.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A final application response. Signing requires a separate frozen approval.
+#[derive(Debug, Eq, PartialEq)]
 pub enum ReviewOutcome {
     Rejected,
     Unsupported,
+    /// Malformed operation-specific parameters.
+    InvalidParameters,
+    /// Signing or key cleanup failed; no result may be delivered.
+    Failed,
+    /// Verified output released after explicit signing approval and key cleanup.
+    Signed(firmica_protocol::signing::SignResponse),
 }
 
 /// An external review and an optional response path. No origin is authenticated by a URI.

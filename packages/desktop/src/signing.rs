@@ -1,10 +1,11 @@
 //! Blocking local workflow. All calls that read files, import, sign or close a key
-//! run outside the UI loop. Browser request parameters never enter this module.
+//! run outside the UI loop. Browser data must first pass operation-specific decoding.
 
 use firmica_cades::{ContentMode, MAX_CONTENT_BYTES};
 use firmica_core::signing::{ApprovalError, CadesReview};
 use firmica_key_worker::{WorkerError, WorkerKey};
-use firmica_signing::SignatureAlgorithm;
+use firmica_protocol::signing::SignResponse;
+use firmica_signing::{SignatureAlgorithm, SigningKey};
 use secrecy::{ExposeSecretMut, SecretBox, SecretString};
 use std::{
     fs::File,
@@ -26,6 +27,7 @@ pub enum Error {
     DestinationExists,
     Cancelled,
     Task,
+    Response,
 }
 
 /// Resolve only beside the running application, including extracted packages.
@@ -67,14 +69,33 @@ impl Prepared {
         mode: ContentMode,
     ) -> Result<Self, Error> {
         let mut content = read_bounded(document, MAX_CONTENT_BYTES)?;
-        let container = read_bounded(container, MAX_CONTAINER_BYTES)?;
         let name = document
             .file_name()
             .ok_or(Error::ReadInput)?
             .to_string_lossy()
             .into_owned();
-        let key = WorkerKey::import(executable, container, password).map_err(Error::Worker)?;
         let document = std::mem::take(content.expose_secret_mut());
+        Self::open_document(
+            executable, name, document, container, password, algorithm, mode,
+        )
+    }
+
+    /// Imports only a user-selected container. Document bytes and choices have
+    /// already been decoded from the bounded request, never from a URL or path.
+    pub fn open_document(
+        executable: &Path,
+        name: String,
+        document: Vec<u8>,
+        container: &Path,
+        password: SecretString,
+        algorithm: SignatureAlgorithm,
+        mode: ContentMode,
+    ) -> Result<Self, Error> {
+        if document.len() > MAX_CONTENT_BYTES {
+            return Err(Error::InputTooLarge);
+        }
+        let container = read_bounded(container, MAX_CONTAINER_BYTES)?;
+        let key = WorkerKey::import(executable, container, password).map_err(Error::Worker)?;
         match CadesReview::prepare(name, document, &key, algorithm, mode) {
             Ok(review) => Ok(Self {
                 worker: Some(key),
@@ -103,29 +124,46 @@ impl Prepared {
 
     /// Called only after explicit UI approval and destination selection. Cleanup
     /// failure takes precedence over signing failure; no output is published then.
-    pub fn sign_and_save(mut self, path: &Path, cancelled: &AtomicBool) -> Result<(), Error> {
+    pub fn sign_and_save(self, path: &Path, cancelled: &AtomicBool) -> Result<(), Error> {
+        let destination = match path.try_exists() {
+            Ok(true) => Err(Error::DestinationExists),
+            Err(_) => Err(Error::Save),
+            Ok(false) => Ok(()),
+        };
+        if let Err(error) = destination {
+            self.cancel()?;
+            return Err(error);
+        }
+        let (_, signature) = self.sign_bytes(cancelled)?;
+        save_new(path, &signature, cancelled)
+    }
+
+    /// Releases a bounded protocol response only after signing and confirmed
+    /// worker cleanup. The caller must deliver it only to the original live reply.
+    pub fn sign_for_browser(self, cancelled: &AtomicBool) -> Result<SignResponse, Error> {
+        let (certificate, signature) = self.sign_bytes(cancelled)?;
+        SignResponse::new(&certificate, &signature).map_err(|_| Error::Response)
+    }
+
+    fn sign_bytes(mut self, cancelled: &AtomicBool) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let mut worker = self.worker.take().expect("live worker");
+        let certificate = worker.identity().certificate_der.clone();
         let result = if cancelled.load(Ordering::Acquire) {
             Err(Error::Cancelled)
         } else {
-            match path.try_exists() {
-                Ok(true) => Err(Error::DestinationExists),
-                Err(_) => Err(Error::Save),
-                Ok(false) => self
-                    .review
-                    .take()
-                    .expect("live review")
-                    .approve()
-                    .sign(&mut worker)
-                    .map_err(Error::Approval),
-            }
+            self.review
+                .take()
+                .expect("live review")
+                .approve()
+                .sign(&mut worker)
+                .map_err(Error::Approval)
         };
         worker.close().map_err(Error::Worker)?;
         let signature = result?;
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
-        save_new(path, &signature, cancelled)
+        Ok((certificate, signature))
     }
 }
 

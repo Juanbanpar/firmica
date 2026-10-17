@@ -145,6 +145,9 @@ async fn forward_review(mut pending: PendingRequest, inbox: Inbox) {
         result = outcome.recv() => {
             let decision = match result {
                 Ok(ReviewOutcome::Unsupported) => Decision::Unsupported,
+                Ok(ReviewOutcome::Failed) => Decision::Failed,
+                Ok(ReviewOutcome::InvalidParameters) => Decision::InvalidParameters,
+                Ok(ReviewOutcome::Signed(result)) => Decision::Signed(result),
                 _ => Decision::Reject,
             };
             let _ = pending.reply.send(decision);
@@ -190,6 +193,17 @@ mod tests {
         for (outcome, expected) in [
             (ReviewOutcome::Rejected, Decision::Reject),
             (ReviewOutcome::Unsupported, Decision::Unsupported),
+            (
+                ReviewOutcome::InvalidParameters,
+                Decision::InvalidParameters,
+            ),
+            (ReviewOutcome::Failed, Decision::Failed),
+            (
+                ReviewOutcome::Signed(
+                    firmica_protocol::signing::SignResponse::new(&[1], &[2]).unwrap(),
+                ),
+                Decision::Signed(firmica_protocol::signing::SignResponse::new(&[1], &[2]).unwrap()),
+            ),
         ] {
             let inbox = Inbox::default();
             let (pending, response) = pending();
