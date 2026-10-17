@@ -14,20 +14,24 @@ import { autoscript } from './autoscript.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const password = 'synthetic-browser-password';
-const content = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
+const smallContent = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount']) {
+for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document']) {
   test(`Firefox AutoScript signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'firmica-browser-signing-'));
     const openssl = args => execFileSync('openssl', args, {cwd:dir, stdio:['ignore','pipe','pipe']});
     const ec = scenario === 'ec';
+    const attached = ec || scenario === 'large-attached';
+    const content = scenario === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
+      : scenario === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
+      : scenario === 'large-detached' ? Buffer.alloc(1024 * 1024, 0xa5) : smallContent;
     const script = await autoscript();
     const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic browser signing</title>
       <button id="sign">Sign</button><script src="/autoscript.js"></script><script>
       AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152, 49154); AutoScript.cargarAppAfirma(); AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
       document.querySelector('#sign').onclick = () => AutoScript.sign('${content.toString('base64')}',
-        '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', 'CAdES', 'mode=${ec ? 'implicit' : 'explicit'}',
+        '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', 'CAdES', 'mode=${attached ? 'implicit' : 'explicit'}',
         (signature, certificate) => {window.result = {signature, certificate};},
         (type, message, code) => {window.result = {type, message, code};});
       </script></html>`;
@@ -104,6 +108,16 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount']) {
       });
       await page.goto(origin);
       await page.locator('#sign').click();
+      if (scenario === 'oversize-document') {
+        await page.waitForFunction(() => window.result, undefined, {timeout:20000});
+        const result = await page.evaluate('window.result');
+        assert.equal(result.type,'java.lang.Exception');
+        assert.match(result.code,/^SAF_03:/);
+        assert.equal(result.signature,undefined);
+        assert.equal((await workers()).length,0,'oversized input must not open a key');
+        assert.equal(await native.evaluate('!!document.querySelector("#sign-certificate")'),false);
+        return;
+      }
       await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'supported request must open the signing form');
       await click('#sign-language');
@@ -175,9 +189,14 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount']) {
         assert.deepEqual(Buffer.from(result.certificate,'base64'),signer,'response certificate must be the reviewed leaf');
         await writeFile(path.join(dir,'result.csig'),Buffer.from(result.signature,'base64'));
         openssl(['cms','-verify','-cades','-binary','-inform','DER','-in','result.csig','-CAfile','signer.pem',
-          '-no-CApath','-no-CAstore','-partial_chain','-purpose','any',...(!ec ? ['-content','reference.bin'] : []),'-out','verified.bin']);
+          '-no-CApath','-no-CAstore','-partial_chain','-purpose','any',...(!attached ? ['-content','reference.bin'] : []),'-out','verified.bin']);
         assert.deepEqual(await readFile(path.join(dir,'verified.bin')),content);
         await until(async () => (await native.evaluate('document.querySelector("#browser-status")?.textContent'))?.includes('Signature prepared'));
+      }
+      if (scenario.startsWith('large-')) {
+        const sent = frames.find(frame => frame.direction === 'sent' && frame.data.startsWith('afirma://sign?'));
+        assert.ok(sent.data.length > 64 * 1024,'document must cross the old request boundary');
+        if (attached) assert.ok(Buffer.from(result.signature,'base64').length > content.length,'attached response must contain the entire document');
       }
       assert.ok(frames.some(frame => frame.direction === 'received' && frame.data === '#wait'));
       const endpoint = frames.find(frame => frame.direction === 'received' && frame.data === 'OK').url;

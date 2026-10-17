@@ -12,6 +12,12 @@ use firmica_cades::ContentMode;
 use firmica_signing::SignatureAlgorithm;
 use thiserror::Error;
 
+/// Maximum CMS response, including an attached document, worker certificates and signature.
+pub const MAX_CMS_SIGNATURE_BYTES: usize = firmica_cades::MAX_CONTENT_BYTES + 3 * 1024 * 1024;
+/// Maximum encoded certificate-plus-CMS WebSocket response size.
+pub const MAX_SIGN_RESPONSE_BYTES: usize =
+    (64_usize * 1024).div_ceil(3) * 4 + 1 + MAX_CMS_SIGNATURE_BYTES.div_ceil(3) * 4;
+
 /// A decoded document and fixed signing choices. No paths, URLs or credentials.
 /// No Debug implementation: document contents must not enter diagnostics.
 pub struct CadesRequest {
@@ -103,6 +109,9 @@ impl CadesRequest {
             }
         }
         let document = decode(request.parameter("dat").ok_or(RequestError::Invalid)?)?;
+        if document.len() > firmica_cades::MAX_CONTENT_BYTES {
+            return Err(RequestError::Invalid);
+        }
         Ok(Self {
             document,
             algorithm,
@@ -153,14 +162,14 @@ pub enum RequestError {
 pub struct SignResponse(String);
 
 impl SignResponse {
-    /// Rejects empty or oversized output. The 3 MiB CMS limit covers the bounded
-    /// inline document, 32 worker certificates and signature without unbounded IPC.
+    /// Rejects empty or oversized output. The CMS limit covers a 16 MiB attached
+    /// document, 32 worker certificates and signature without unbounded output.
     /// This encodes bytes; it does not validate CMS or authenticate the certificate.
     pub fn new(certificate: &[u8], signature: &[u8]) -> Result<Self, RequestError> {
         if certificate.is_empty()
             || certificate.len() > 64 * 1024
             || signature.is_empty()
-            || signature.len() > 3 * 1024 * 1024
+            || signature.len() > MAX_CMS_SIGNATURE_BYTES
         {
             return Err(RequestError::Invalid);
         }
@@ -268,6 +277,26 @@ mod tests {
         assert_eq!(format!("{response:?}"), "SignResponse { .. }");
         assert_eq!(response.into_wire(), "_w==|AP8=");
         assert!(SignResponse::new(&[], &[1]).is_err());
-        assert!(SignResponse::new(&[1], &vec![0; 3 * 1024 * 1024 + 1]).is_err());
+        assert!(SignResponse::new(&[1], &vec![0; MAX_CMS_SIGNATURE_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn decoded_document_limit_handles_base64_rounding() {
+        // One byte over the document limit has the same encoded length as the limit.
+        let encoded = URL_SAFE.encode(vec![0; firmica_cades::MAX_CONTENT_BYTES + 1]);
+        assert_eq!(encoded.len(), crate::MAX_INLINE_BASE64_BYTES);
+        let uri = format!("afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat={encoded}");
+        let request = ProtocolRequest::parse_websocket(&uri).unwrap();
+        assert!(matches!(
+            CadesRequest::decode(&request),
+            Err(RequestError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn response_bound_includes_both_base64_fields_and_separator() {
+        let response =
+            SignResponse::new(&vec![0; 64 * 1024], &vec![0; MAX_CMS_SIGNATURE_BYTES]).unwrap();
+        assert_eq!(response.into_wire().len(), MAX_SIGN_RESPONSE_BYTES);
     }
 }

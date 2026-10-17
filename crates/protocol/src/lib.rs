@@ -3,13 +3,18 @@
 //! Behaviour is source-derived, not a declaration of AutoFirma interoperability.
 
 use percent_encoding::percent_decode_str;
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 pub mod signing;
 
-/// Maximum encoded URI size accepted by the feasibility prototype.
+/// Maximum native invocation, control query, or WebSocket metadata size.
 pub const MAX_URI_BYTES: usize = 64 * 1024;
+/// Maximum Base64 document size before percent encoding.
+pub const MAX_INLINE_BASE64_BYTES: usize = firmica_cades::MAX_CONTENT_BYTES.div_ceil(3) * 4;
+/// Maximum WebSocket request: one inline document plus bounded URI metadata.
+/// Native OS invocations retain [`MAX_URI_BYTES`].
+pub const MAX_WEBSOCKET_REQUEST_BYTES: usize = MAX_INLINE_BASE64_BYTES + MAX_URI_BYTES;
 const MAX_PARAMETERS: usize = 64;
 
 /// AutoFirma protocol version, independent of application and AutoScript versions.
@@ -136,7 +141,26 @@ impl ProtocolRequest {
     /// unknown operations/versions and oversized input. Unlike upstream, duplicates do
     /// not overwrite earlier values and malformed versions do not fall back to zero.
     pub fn parse(uri: &str) -> Result<Self, ParseError> {
-        if uri.len() > MAX_URI_BYTES {
+        Self::parse_bounded(uri, false)
+    }
+
+    /// Parses a WebSocket operation without widening native URI limits.
+    /// Only `sign` may exceed 64 KiB; its decoded Base64 `dat` field is bounded
+    /// by [`MAX_INLINE_BASE64_BYTES`], and all other encoded fields together by
+    /// [`MAX_URI_BYTES`]. Decoded document size/format and session authentication
+    /// must still be checked by the application and transport respectively.
+    pub fn parse_websocket(uri: &str) -> Result<Self, ParseError> {
+        Self::parse_bounded(uri, true)
+    }
+
+    fn parse_bounded(uri: &str, websocket: bool) -> Result<Self, ParseError> {
+        if uri.len()
+            > if websocket {
+                MAX_WEBSOCKET_REQUEST_BYTES
+            } else {
+                MAX_URI_BYTES
+            }
+        {
             return Err(ParseError::TooLarge);
         }
         if uri.chars().any(char::is_control) || uri.contains('#') {
@@ -145,7 +169,11 @@ impl ProtocolRequest {
         let body = uri.strip_prefix("afirma://").ok_or(ParseError::Scheme)?;
         let (operation, query) = body.split_once('?').ok_or(ParseError::Syntax)?;
         let operation = operation.strip_suffix('/').unwrap_or(operation).parse()?;
-        let parameters = parse_query(query)?;
+        let inline_data = websocket && operation == Operation::Sign;
+        if !inline_data && uri.len() > MAX_URI_BYTES {
+            return Err(ParseError::TooLarge);
+        }
+        let parameters = parse_query_bounded(query, inline_data)?;
         let key = if matches!(operation, Operation::WebSocket | Operation::Service) {
             "v"
         } else {
@@ -234,13 +262,27 @@ impl WebSocketBootstrap {
 
 /// Parses a query without interpreting operation-specific fields. Values use form encoding.
 pub fn parse_query(query: &str) -> Result<BTreeMap<String, String>, ParseError> {
-    if query.len() > MAX_URI_BYTES {
+    parse_query_bounded(query, false)
+}
+
+fn parse_query_bounded(
+    query: &str,
+    inline_data: bool,
+) -> Result<BTreeMap<String, String>, ParseError> {
+    if query.len()
+        > if inline_data {
+            MAX_WEBSOCKET_REQUEST_BYTES
+        } else {
+            MAX_URI_BYTES
+        }
+    {
         return Err(ParseError::TooLarge);
     }
     let mut parameters = BTreeMap::new();
     if query.is_empty() {
         return Ok(parameters);
     }
+    let mut metadata_bytes = 0;
     for (index, pair) in query.split('&').enumerate() {
         if index >= MAX_PARAMETERS {
             return Err(ParseError::TooLarge);
@@ -248,6 +290,12 @@ pub fn parse_query(query: &str) -> Result<BTreeMap<String, String>, ParseError> 
         let (key, value) = pair.split_once('=').ok_or(ParseError::Syntax)?;
         if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return Err(ParseError::Syntax);
+        }
+        if inline_data && key != "dat" {
+            metadata_bytes += pair.len() + 1;
+            if metadata_bytes > MAX_URI_BYTES {
+                return Err(ParseError::TooLarge);
+            }
         }
         let bytes = value.as_bytes();
         for (i, b) in bytes.iter().enumerate() {
@@ -259,11 +307,18 @@ pub fn parse_query(query: &str) -> Result<BTreeMap<String, String>, ParseError> 
                 return Err(ParseError::Encoding);
             }
         }
-        let value = value.replace('+', " ");
+        let value = if value.contains('+') {
+            Cow::Owned(value.replace('+', " "))
+        } else {
+            Cow::Borrowed(value)
+        };
         let value = percent_decode_str(&value)
             .decode_utf8()
             .map_err(|_| ParseError::Encoding)?
             .into_owned();
+        if inline_data && key == "dat" && value.len() > MAX_INLINE_BASE64_BYTES {
+            return Err(ParseError::TooLarge);
+        }
         // Newlines in Base64-encoded properties are allowed; NUL and other controls are not.
         if value
             .chars()
@@ -281,7 +336,7 @@ pub fn parse_query(query: &str) -> Result<BTreeMap<String, String>, ParseError> 
 /// Errors are deliberately static: no untrusted values appear in diagnostics.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum ParseError {
-    #[error("invocation exceeds prototype limits")]
+    #[error("request exceeds size limits")]
     TooLarge,
     #[error("expected afirma:// scheme")]
     Scheme,
@@ -304,6 +359,71 @@ pub enum ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_documents_have_separate_size_and_metadata_limits() {
+        use base64::{engine::general_purpose::URL_SAFE, Engine};
+        let document = vec![0xff; firmica_cades::MAX_CONTENT_BYTES];
+        let encoded = URL_SAFE.encode(&document);
+        let uri = format!("afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat={encoded}");
+        assert_eq!(ProtocolRequest::parse(&uri), Err(ParseError::TooLarge));
+        assert_eq!(
+            parse_query(uri.split_once('?').unwrap().1),
+            Err(ParseError::TooLarge)
+        );
+        let request = ProtocolRequest::parse_websocket(&uri).unwrap();
+        assert_eq!(
+            signing::CadesRequest::decode(&request).unwrap().document(),
+            document
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&uri.replacen("sign?", "save?", 1)),
+            Err(ParseError::TooLarge)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&format!(
+                "{uri}&unknown={}",
+                "x".repeat(MAX_URI_BYTES)
+            )),
+            Err(ParseError::TooLarge)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&format!("{uri}&idsession=first&idsession=second")),
+            Err(ParseError::Duplicate)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&format!("{uri}&dat=AAAA")),
+            Err(ParseError::Duplicate)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&format!("{uri}%GG")),
+            Err(ParseError::Encoding)
+        );
+    }
+
+    #[test]
+    fn oversized_base64_is_rejected_before_document_decoding() {
+        let uri = format!(
+            "afirma://sign?dat={}",
+            "A".repeat(MAX_INLINE_BASE64_BYTES + 4)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&uri),
+            Err(ParseError::TooLarge)
+        );
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&"x".repeat(MAX_WEBSOCKET_REQUEST_BYTES + 1)),
+            Err(ParseError::TooLarge)
+        );
+        // Non-sign operations retain the whole-URI limit, including their prefix.
+        assert_eq!(
+            ProtocolRequest::parse_websocket(&format!(
+                "afirma://save?dat={}",
+                "A".repeat(MAX_URI_BYTES - "dat=".len())
+            )),
+            Err(ParseError::TooLarge)
+        );
+    }
     #[test]
     fn parses_source_derived_envelopes() {
         for op in [

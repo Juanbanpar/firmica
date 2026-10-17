@@ -3,7 +3,7 @@
 
 use firmica_protocol::{
     parse_query, Operation, ParseError, ProtocolRequest, ProtocolVersion, WebSocketBootstrap,
-    MAX_URI_BYTES,
+    MAX_URI_BYTES, MAX_WEBSOCKET_REQUEST_BYTES,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -31,7 +31,7 @@ use tokio_tungstenite::{
     tungstenite::{
         self,
         handshake::server::{Request, Response},
-        protocol::{Message, WebSocketConfig},
+        protocol::{frame::coding::CloseCode, CloseFrame, Message, WebSocketConfig},
     },
 };
 
@@ -227,8 +227,11 @@ async fn connection(
         .await
         .map_err(|_| TransportError::Timeout)??;
     let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_URI_BYTES))
-        .max_frame_size(Some(MAX_URI_BYTES));
+        .max_message_size(Some(MAX_WEBSOCKET_REQUEST_BYTES))
+        .max_frame_size(Some(MAX_WEBSOCKET_REQUEST_BYTES))
+        .max_write_buffer_size(
+            firmica_protocol::signing::MAX_SIGN_RESPONSE_BYTES + 128 * 1024 + 14,
+        );
     // Tungstenite requires its concrete HTTP ErrorResponse as the callback error type.
     #[allow(clippy::result_large_err)]
     let callback = move |request: &Request, response: Response| {
@@ -270,7 +273,26 @@ async fn connection(
         };
         let mut state = session.lock().await;
         let version = state.bootstrap.version;
-        let response = if !state.authenticated(&message) {
+        // Parse document-bearing requests once. Authentication must not allocate
+        // and decode a second copy of a large document merely to find its session.
+        let request = message
+            .starts_with("afirma://")
+            .then(|| ProtocolRequest::parse_websocket(&message));
+        if message.len() > MAX_URI_BYTES && !matches!(&request, Some(Ok(_))) {
+            drop(state);
+            socket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Size,
+                    reason: "invalid or oversized request".into(),
+                }))
+                .await?;
+            break;
+        }
+        let authenticated = match &request {
+            Some(Ok(request)) => request.parameter("idsession") == Some(state.bootstrap.session()),
+            _ => state.authenticated(&message),
+        };
+        let response = if !authenticated {
             ProtocolError::Session.wire(version)
         } else if message.starts_with("echo=-idsession=") {
             "OK".into()
@@ -290,7 +312,7 @@ async fn connection(
         } else if state.used {
             ProtocolError::Unsupported.wire(version)
         } else {
-            match ProtocolRequest::parse(&message) {
+            match request.unwrap_or(Err(ParseError::Scheme)) {
                 Ok(mut request)
                     if !matches!(request.operation, Operation::WebSocket | Operation::Service) =>
                 {
@@ -356,6 +378,9 @@ pub enum TransportError {
     #[error("an explicit HTTP(S) test origin is required")]
     Origin,
 }
+
+#[cfg(test)]
+mod transfer_tests;
 
 #[cfg(test)]
 mod tests {
