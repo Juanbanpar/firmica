@@ -78,6 +78,9 @@ dx build --locked --package desktop --platform desktop
 dx build --locked --package mobile --platform desktop --features mobile
 cargo fmt --all --check
 cargo test -p firmica-protocol -p firmica-core -p firmica-transport -p desktop -p mobile
+# Linux desktop signing integration tests:
+cargo build --locked -p firmica-key-worker
+FIRMICA_TEST_WORKER="$PWD/target/debug/firmica-key-worker" cargo test --locked -p desktop -- --ignored --test-threads=1
 cargo clippy -p firmica-protocol -p firmica-core -p firmica-transport -p ui -p desktop -p mobile --all-targets -- -D warnings
 cargo check -p desktop
 cargo check -p mobile  # host check; native Android test described below
@@ -88,12 +91,16 @@ npx playwright install chromium firefox
 cargo build -p firmica-transport --example probe
 npm run test:autoscript
 npm run test:desktop
+npm run test:signing
 # After building the Debian bundle above (x86-64):
 FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
+FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:signing
 npm run test:native-interop
 npm run test:os-handler
 npm run test:lifecycle
 ```
+
+The signing window test additionally needs `zenity`, `openbox`, `xclip`, and `dbus-run-session`. It uses a disposable XDG profile, session bus, clipboard, and Xvfb display.
 
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 

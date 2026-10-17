@@ -2,6 +2,7 @@
   "name": "firmica-interop-tests",
   "private": true,
   "scripts": {
+    "test:signing": "node --test tests/interop/signing.test.mjs",
     "test:lifecycle": "node --test tests/interop/lifecycle.test.mjs",
     "test:os-handler": "FIRMICA_OS_HANDLER=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' node --test tests/interop/autoscript.test.mjs",
     "test:native-interop": "FIRMICA_NATIVE_INTEROP=1 node --test tests/interop/autoscript.test.mjs",

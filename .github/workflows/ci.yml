@@ -98,6 +98,12 @@ jobs:
       # Generates mobile assets and checks its host entry point; not a native mobile build.
       - run: dx build --locked --package mobile --platform desktop --features mobile
       - run: cargo +stable test --locked -p desktop -p mobile
+      - name: Verify desktop signing and cleanup with the native worker
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo +stable build --locked -p firmica-key-worker
+          FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - run: cargo +stable clippy --locked -p ui -p desktop -p mobile --all-targets -- -D warnings
       - run: cargo +stable doc --locked -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
 
@@ -108,7 +114,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool desktop-file-utils libnss3-tools dbus-daemon
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool zenity openbox xclip desktop-file-utils libnss3-tools dbus-daemon
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Install verified Dioxus CLI 0.7.10
@@ -129,6 +135,10 @@ jobs:
       - run: npm run test:desktop
       - name: Verify extracted Debian payload
         run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
+      - name: Verify native standalone signing
+        run: npm run test:signing
+      - name: Verify standalone signing from the Debian payload
+        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:signing
       - run: npm run test:native-interop
       - run: npm run test:os-handler
       - run: npm run test:lifecycle
