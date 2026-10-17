@@ -2025,6 +2025,9 @@ dependencies = [
 name = "firmica-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "firmica-cades",
+ "firmica-signing",
  "percent-encoding",
  "thiserror 2.0.21",
 ]

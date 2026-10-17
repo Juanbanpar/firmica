@@ -7,3 +7,6 @@ license = "GPL-3.0-or-later"
 [dependencies]
 thiserror.workspace = true
 percent-encoding.workspace = true
+base64 = "0.22"
+firmica-signing.workspace = true
+firmica-cades.workspace = true

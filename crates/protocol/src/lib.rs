@@ -6,6 +6,8 @@ use percent_encoding::percent_decode_str;
 use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
+pub mod signing;
+
 /// Maximum encoded URI size accepted by the feasibility prototype.
 pub const MAX_URI_BYTES: usize = 64 * 1024;
 const MAX_PARAMETERS: usize = 64;

@@ -1,5 +1,5 @@
-//! Restricted WSS feasibility service. It can request review and return rejection or
-//! unsupported-operation errors; it cannot sign, retrieve URLs, or read documents.
+//! Bounded local WSS service. The application supplies explicitly approved signing
+//! results or errors; the transport never accesses documents or private keys.
 
 use firmica_protocol::{
     parse_query, Operation, ParseError, ProtocolRequest, ProtocolVersion, WebSocketBootstrap,
@@ -35,11 +35,17 @@ use tokio_tungstenite::{
     },
 };
 
-/// The only possible results of a feasibility review.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Application outcome for one authenticated request.
+#[derive(Debug, Eq, PartialEq)]
 pub enum Decision {
     Reject,
     Unsupported,
+    /// Invalid or unsupported request parameters.
+    InvalidParameters,
+    /// Signing or key cleanup failed; no result may be delivered.
+    Failed,
+    /// A verified signature, released only after explicit approval and key cleanup.
+    Signed(firmica_protocol::signing::SignResponse),
 }
 
 /// A bounded handoff to the application. Dropping the reply cancels the request.
@@ -55,11 +61,13 @@ pub enum ProtocolError {
     Unsupported,
     Session,
     Parameters,
+    SigningFailed,
 }
 
 impl ProtocolError {
     pub fn wire(self, version: ProtocolVersion) -> String {
         let (legacy, code, message) = match self {
+            Self::SigningFailed => ("SAF_09", "200115", "Signing failed"),
             Self::Cancelled => ("CANCEL", "500001", "Operation cancelled by user"),
             Self::Unsupported => ("SAF_04", "600002", "Operation not supported"),
             Self::Session => ("SAF_46", "620010", "Invalid WebSocket session"),
@@ -270,7 +278,7 @@ async fn connection(
             match state.result.as_mut().map(oneshot::Receiver::try_recv) {
                 Some(Ok(decision)) => {
                     state.result = None;
-                    decision_error(decision).wire(version)
+                    decision_wire(decision, version)
                 }
                 Some(Err(oneshot::error::TryRecvError::Empty)) => "#wait".into(),
                 Some(Err(oneshot::error::TryRecvError::Closed)) => {
@@ -307,7 +315,7 @@ async fn connection(
                                 .and_then(Result::ok)
                                 .unwrap_or(Decision::Reject);
                             socket
-                                .send(Message::Text(decision_error(decision).wire(version).into()))
+                                .send(Message::Text(decision_wire(decision, version).into()))
                                 .await?;
                             continue;
                         }
@@ -323,10 +331,13 @@ async fn connection(
     Ok(())
 }
 
-fn decision_error(decision: Decision) -> ProtocolError {
+fn decision_wire(decision: Decision, version: ProtocolVersion) -> String {
     match decision {
-        Decision::Reject => ProtocolError::Cancelled,
-        Decision::Unsupported => ProtocolError::Unsupported,
+        Decision::Reject => ProtocolError::Cancelled.wire(version),
+        Decision::Unsupported => ProtocolError::Unsupported.wire(version),
+        Decision::Failed => ProtocolError::SigningFailed.wire(version),
+        Decision::InvalidParameters => ProtocolError::Parameters.wire(version),
+        Decision::Signed(result) => result.into_wire(),
     }
 }
 
@@ -365,6 +376,23 @@ mod tests {
         assert_eq!(
             ProtocolError::Cancelled.wire(v41),
             "err-11:=AF500001 - Operation cancelled by user"
+        );
+        assert_eq!(
+            decision_wire(Decision::Failed, v4),
+            "SAF_09: Signing failed"
+        );
+        assert_eq!(
+            decision_wire(Decision::Failed, v41),
+            "err-00:=AF200115 - Signing failed"
+        );
+        assert_eq!(
+            decision_wire(
+                Decision::Signed(
+                    firmica_protocol::signing::SignResponse::new(&[255], &[1]).unwrap()
+                ),
+                v4
+            ),
+            "_w==|AQ=="
         );
     }
     #[test]
