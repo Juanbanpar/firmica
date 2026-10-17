@@ -135,9 +135,10 @@ fn lost_capability_blocks_execution_without_using_the_key() {
 #[test]
 fn expiry_and_clock_rollback_are_rechecked_after_approval() {
     let (start, end) = period();
+    // Windows SystemTime uses 100 ns intervals; 1 ns arithmetic rounds to zero.
     for (time, expected) in [
-        (start - Duration::from_nanos(1), Restriction::NotYetValid),
-        (end + Duration::from_nanos(1), Restriction::Expired),
+        (start - Duration::from_millis(1), Restriction::NotYetValid),
+        (end + Duration::from_millis(1), Restriction::Expired),
     ] {
         let mut key = CountingKey::new();
         let approved = review(&key).approve();
