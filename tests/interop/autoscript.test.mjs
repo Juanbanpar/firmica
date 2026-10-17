@@ -11,7 +11,7 @@ import path from 'node:path';
 import { chromium, firefox } from 'playwright';
 import { freePort, until, inspector } from './native.mjs';
 
-import { autoscript } from './autoscript.mjs';
+import { autoscript, revision } from './autoscript.mjs';
 const root = path.resolve(import.meta.dirname, '../..');
 const artifact = path.join(root, '.test-artifacts');
 
