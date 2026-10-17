@@ -1988,7 +1988,12 @@ name = "firmica-core"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "firmica-cades",
  "firmica-protocol",
+ "firmica-signing",
+ "firmica-validation",
+ "sha2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1998,6 +2003,7 @@ dependencies = [
  "der",
  "firmica-cades",
  "firmica-certificates",
+ "firmica-core",
  "firmica-signing",
  "openssl",
  "rustix",

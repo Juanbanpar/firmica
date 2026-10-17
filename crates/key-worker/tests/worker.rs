@@ -21,8 +21,9 @@ fn unsupported_platforms_reject_import_without_launching_a_worker() {
 mod linux {
     use super::*;
     use der::{Any, Decode, Encode, Sequence};
-    use firmica_cades::{sign, ContentMode, SigningOptions};
+    use firmica_cades::ContentMode;
     use firmica_certificates::{CertificateError, MAX_PKCS12_BYTES};
+    use firmica_core::signing::CadesReview;
     use firmica_key_worker::{
         MAX_ADDRESS_SPACE_BYTES, MAX_CPU_SECONDS, MAX_PASSWORD_BYTES, MAX_SIGNING_INPUT_BYTES,
         OPERATION_TIMEOUT,
@@ -45,7 +46,7 @@ mod linux {
         io::Read,
         os::unix::fs::PermissionsExt,
         process::{Command, Stdio},
-        time::{Instant, SystemTime},
+        time::Instant,
     };
 
     const RSA: SignatureAlgorithm = SignatureAlgorithm::RsaPkcs1v15Sha256;
@@ -175,19 +176,21 @@ mod linux {
                 .unwrap();
             let mut produced = Vec::new();
             for mode in [ContentMode::Attached, ContentMode::Detached] {
-                produced.push((
+                let review = CadesReview::prepare(
+                    "synthetic.bin".into(),
+                    MESSAGE.to_vec(),
+                    &worker,
+                    algorithm,
                     mode,
-                    sign(
-                        &mut worker,
-                        MESSAGE,
-                        SigningOptions {
-                            algorithm,
-                            mode,
-                            signing_time: SystemTime::now(),
-                        },
-                    )
-                    .unwrap(),
-                ));
+                )
+                .unwrap();
+                assert_eq!(review.document_hash(), &sha256(MESSAGE));
+                assert_eq!(
+                    review.certificate().fingerprint(),
+                    &sha256(&certificate.to_der().unwrap())
+                );
+                assert_eq!(review.certificate().unchecked_checks().len(), 4);
+                produced.push((mode, review.approve().sign(&mut worker).unwrap()));
             }
             // Cleanup acknowledgement and successful child exit gate all consumption.
             worker.close().unwrap();

@@ -14,6 +14,7 @@ thiserror.workspace = true
 rustix = { version = "1", features = ["process", "fs", "event"] }
 
 [dev-dependencies]
+firmica-core.workspace = true
 firmica-cades.workspace = true
 openssl.workspace = true
 tempfile = "3"

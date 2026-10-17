@@ -7,3 +7,8 @@ license = "GPL-3.0-or-later"
 [dependencies]
 firmica-protocol.workspace = true
 async-channel = "2"
+firmica-signing.workspace = true
+firmica-cades.workspace = true
+firmica-validation.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true

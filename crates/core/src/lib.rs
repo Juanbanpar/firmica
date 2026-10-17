@@ -1,4 +1,7 @@
-//! Review state independent of Dioxus. This feasibility build cannot sign documents.
+//! Invocation review and explicit local signing approval, independent of Dioxus.
+//! Browser invocation review never authorizes a signature.
+
+pub mod signing;
 
 use firmica_protocol::ProtocolRequest;
 
