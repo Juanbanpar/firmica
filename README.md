@@ -135,7 +135,9 @@ python3 tests/interop/ios.py --app target/dx/mobile/debug/ios/Mobile.app
 
 The iOS test creates a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
 
-The dependency graph includes `glib 0.18.5` (RUSTSEC-2024-0429) and `rand 0.7.3` (RUSTSEC-2026-0097), which have known unsoundness advisories. Run `cargo audit --deny unsound` to check dependencies.
+The GTK dependencies require `glib 0.18.5`. Its vendored source applies the [upstream iterator fix](https://github.com/gtk-rs/gtk-rs-core/commit/05dff0ee696f9bcd8617cd48c4b812d046d440cb) for RUSTSEC-2024-0429. The vendored `phf_generator 0.8.0` uses patched `rand 0.8` instead of `rand 0.7`. Both retain their upstream package versions; source provenance and exact diffs are recorded in `tools/backports.toml` and `tools/backports/`.
+
+Run `python3 tools/audit-dependencies.py` with Python 3.11+ and `cargo-audit 0.22.2`. It verifies the complete vendored source fingerprints and audits their original registry identities, since plain `cargo audit` skips path dependencies. The raw report remains visible: the GLib version finding is accepted only for the verified fixed source; other unsoundness findings and vulnerabilities fail. Unmaintained dependency warnings remain visible. CI also runs `cargo test --release --locked -p firmica-dependency-checks` to exercise the fixes with compiler optimizations.
 
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 

@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["crates/vendor/glib", "crates/vendor/phf_generator"]
 members = [
     "packages/ui",
     "packages/web",
@@ -13,6 +14,7 @@ members = [
     "crates/cades",
     "crates/key-worker",
     "crates/validation",
+    "crates/dependency-checks",
 ]
 
 [workspace.dependencies]
@@ -37,3 +39,8 @@ percent-encoding = "2.3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
 jni = "0.21"
 cesu8 = "1.1"
+
+# Source backports retain upstream versions. Verify them with tools/audit-dependencies.py.
+[patch.crates-io]
+glib = { path = "crates/vendor/glib" }
+phf_generator = { path = "crates/vendor/phf_generator" }

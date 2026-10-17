@@ -1,0 +1,21 @@
+# SHA-256 fingerprints cover sorted relative paths, byte lengths and file contents.
+# Upstream crate archives were verified against the original Cargo.lock checksums.
+[[backport]]
+name = "glib"
+version = "0.18.5"
+path = "crates/vendor/glib"
+archive_sha256 = "233daaf6e83ae6a12a52055f568f9d7cf4671dabb78ff9560ab6da230ce00ee5"
+source_sha256 = "70307c5cfb234ce75d841df2a1689ea1e20396ba9db2a4f6990222302befd831"
+fixes = ["RUSTSEC-2024-0429"]
+upstream_fix = "https://github.com/gtk-rs/gtk-rs-core/commit/05dff0ee696f9bcd8617cd48c4b812d046d440cb"
+patch = "tools/backports/glib.patch"
+
+[[backport]]
+name = "phf_generator"
+version = "0.8.0"
+path = "crates/vendor/phf_generator"
+archive_sha256 = "17367f0cc86f2d25802b2c26ee58a7b23faeccf78a396094c13dced0d0182526"
+source_sha256 = "b2e0ff03ca13949b0bc928a399b4a4f87d0caffe0c7672296d6636e629f4a9bd"
+fixes = []
+upstream_fix = "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
+patch = "tools/backports/phf_generator.patch"
