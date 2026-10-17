@@ -32,7 +32,7 @@ test(`Linux ${deb ? 'Debian payload' : 'OS invocation'}: cold launch, running-in
     }
     metadata = await readFile(path.join(control,'control'),'utf8');
     assert.match(metadata,/^Package: firmica$/m);
-    assert.match(metadata,/^Description: Firmica protocol feasibility client; signing is unavailable$/m);
+    assert.match(metadata,/^Description: Firmica electronic-signature client$/m);
     execFileSync('md5sum',['--check',path.join(control,'md5sums')],{cwd:payload,stdio:'pipe'});
     binary = path.join(payload,'usr/bin/firmica');
     data = path.join(payload,'usr/share');

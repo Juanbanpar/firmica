@@ -4,6 +4,7 @@ name = "Firmica"
 [bundle]
 identifier = "org.firmica.client"
 publisher = "Firmica contributors"
+external_bin = ["../../target/sidecars/firmica-key-worker"]
 
 [deep_links]
 schemes = ["afirma"]

@@ -4,6 +4,8 @@ use ui::Navbar;
 use views::{Diagnostics, Home};
 
 mod invocation;
+#[cfg(target_os = "linux")]
+mod signing;
 mod views;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -12,6 +14,8 @@ enum Route {
     #[layout(DesktopNavbar)]
     #[route("/")]
     Home {},
+    #[route("/sign")]
+    LocalSigning {},
     #[route("/diagnostics")]
     Diagnostics {},
 }
@@ -46,6 +50,10 @@ fn DesktopNavbar() -> Element {
                 "Home"
             }
             Link {
+                to: Route::LocalSigning {},
+                "Sign a document"
+            }
+            Link {
                 to: Route::Diagnostics {},
                 "Diagnostics"
             }
@@ -53,4 +61,9 @@ fn DesktopNavbar() -> Element {
 
         Outlet::<Route> {}
     }
+}
+
+#[component]
+fn LocalSigning() -> Element {
+    rsx! { views::LocalSigning {} }
 }

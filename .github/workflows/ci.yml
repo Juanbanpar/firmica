@@ -119,9 +119,8 @@ jobs:
           tar -xzf dx.tar.gz -C "$HOME/.cargo/bin" dx
           rm dx.tar.gz
           dx --version
-      - name: Build Debian feasibility bundle
-        working-directory: packages/desktop
-        run: dx bundle --locked --platform desktop --release --package-types deb
+      - name: Build Linux application and companion worker bundle
+        run: python3 tools/build-linux-desktop.py bundle
       - run: dx build --locked --package web --platform web
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox

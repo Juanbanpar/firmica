@@ -76,8 +76,8 @@ pub fn InvocationReview() -> Element {
                 }
             }
             p { class: "mb-6 text-sm text-slate-600 dark:text-slate-300",
-                if es { "Prototipo de interoperabilidad · Sin funciones de firma" }
-                else { "Interoperability prototype · Signing unavailable" }
+                if es { "Las solicitudes externas solo permiten revisión y cancelación" }
+                else { "External requests support review and cancellation only" }
             }
             section { class: "rounded-xl border border-slate-300 p-6 dark:border-slate-700", aria_label: if es { "Solicitud externa" } else { "External request" },
                 h2 { class: "mb-4 text-xl font-semibold",
@@ -138,7 +138,7 @@ pub fn Navbar(children: Element) -> Element {
 pub fn Diagnostics() -> Element {
     rsx! { main { class: "mx-auto max-w-3xl p-6 sm:p-12",
         h1 { class: "mb-4 text-2xl font-semibold", "Diagnostics / Diagnóstico" }
-        p { "Phase 0: URI review and restricted local WSS. No signing engine, certificate access, remote retrieval, or trust validation." }
-        p { class: "mt-4", "Android and iOS protocol delivery requires native-device verification. See the compatibility matrix." }
+        p { "External URI and WSS requests support review and cancellation only. Standalone document signing is available in the Linux desktop application." }
+        p { class: "mt-4", "Certificate trust, revocation and legal qualification are not validated. / No se validan la confianza del certificado, su revocación ni su cualificación legal." }
     } }
 }

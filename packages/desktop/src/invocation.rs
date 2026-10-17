@@ -12,7 +12,7 @@ pub fn inbox() -> Inbox {
 }
 
 #[derive(Parser)]
-#[command(about = "Firmica protocol feasibility client; signing is unavailable")]
+#[command(about = "Firmica electronic-signature client")]
 struct Arguments {
     /// Optional afirma:// invocation; it is parsed but never executed as a command.
     uri: Option<String>,
@@ -107,9 +107,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
     }
     let native_events = sender.clone();
     let config = dioxus::desktop::Config::new()
-        .with_window(
-            dioxus::desktop::WindowBuilder::new().with_title("Firmica · Protocol feasibility"),
-        )
+        .with_window(dioxus::desktop::WindowBuilder::new().with_title("Firmica"))
         .with_custom_event_handler(move |event, _| {
             if let dioxus::desktop::tao::event::Event::Opened { urls } = event {
                 for url in urls {

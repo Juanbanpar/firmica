@@ -2,7 +2,7 @@
 
 Rust electronic-signature client using Dioxus 0.7.10 and Tailwind CSS 4, targeting existing AutoFirma browser integrations.
 
-The application accepts `afirma://` invocations and local TLS WebSocket requests for review. It cannot sign documents, access certificates, or validate signatures.
+The Linux desktop application signs local documents in CAdES format using PKCS#12 certificates. Browser `afirma://` invocations and local TLS WebSocket requests support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
 
 ## Build
 
@@ -29,13 +29,24 @@ dx serve --platform ios
 
 `dx` detects each package's `tailwind.css`, runs Tailwind 4.1.5, and writes `assets/tailwind.css` before collecting assets. All three entry files load that local asset. The shared source directory and theme are included explicitly. Plain `cargo check` does not compile CSS; run `dx build` first. Build tools may download dependencies; the local application UI requires no internet connection.
 
-To build the Linux Debian package, run from `packages/desktop`:
+For Linux document signing, build the application and its companion key worker together from the workspace root:
 
 ```sh
-dx bundle --locked --platform desktop --release --package-types deb
+python3 tools/build-linux-desktop.py build
+./target/dx/firmica/debug/linux/app/firmica
+# Release application and Debian package:
+python3 tools/build-linux-desktop.py bundle
 ```
 
-Dioxus 0.7.10 resolves the custom desktop-template path from the working directory. The package contains the `firmica` executable and its `afirma` desktop handler. Install runtime dependencies separately; the generated package does not declare them.
+The builder requires Python 3 and invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install runtime dependencies separately; the generated package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback. Local signing is unavailable on other platforms.
+
+## Local signing
+
+Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and enter its password. Choose RSA PKCS#1 v1.5/SHA-256 or ECDSA P-256/SHA-256 and whether to embed the document. RSA keys must have at least 2048 bits. Documents are limited to 16 MiB and containers to 8 MiB. Empty documents and empty passwords are supported.
+
+**Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog; cancelling it preserves the review. **Cancel** closes the certificate worker without signing.
+
+Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
 
 ## Invocation
 
@@ -114,6 +125,6 @@ The SoftHSM test creates a disposable token store and uses synthetic, non-export
 
 The key worker keeps unlocked PKCS#12 keys in a separate Linux process with CPU, address-space and IPC deadline limits. Its tests cover import, CAdES signing, process termination and cleanup; they take about 30 seconds. Imports on other platforms are rejected. API contracts and import limitations are documented with rustdoc.
 
-`firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. These library APIs are not connected to the application controls.
+`firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux desktop signing screen uses this review API.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
