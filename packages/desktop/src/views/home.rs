@@ -17,6 +17,7 @@ pub enum BrowserCompletion {
 
 #[cfg(target_os = "linux")]
 pub struct BrowserOperation {
+    generation: u64,
     pub request: firmica_protocol::signing::CadesRequest,
     pub version: firmica_protocol::ProtocolVersion,
     pub reply: async_channel::Sender<firmica_core::ReviewOutcome>,
@@ -38,6 +39,7 @@ pub fn Home() -> Element {
         let incoming = incoming.clone();
         let fallback = fallback.clone();
         async move {
+            let mut generation = 0_u64;
             while let Ok(incoming) = incoming.receiver.recv().await {
                 if browser.peek().is_some() || *fallback_busy.peek() {
                     if let Some(reply) = incoming.reply {
@@ -51,8 +53,10 @@ pub fn Home() -> Element {
                     }
                     match CadesRequest::decode(&incoming.request) {
                         Ok(request) => {
+                            generation = generation.wrapping_add(1);
                             completion.set(None);
                             browser.set(Some(BrowserOperation {
+                                generation,
                                 request,
                                 version: incoming.request.version,
                                 reply: reply.clone(),
@@ -76,9 +80,17 @@ pub fn Home() -> Element {
             }
         }
     });
+    let generation = browser
+        .read()
+        .as_ref()
+        .map(|operation| operation.generation);
     rsx! {
-        if browser.read().is_some() {
-            super::signing::LocalSigning { browser: Some(browser), completion: Some(completion) }
+        if let Some(generation) = generation {
+            // A new request must get fresh password, consent and cancellation
+            // state even when the previous request ends within the same render.
+            for generation in [generation] {
+                super::signing::LocalSigning { key: "browser-{generation}", browser: Some(browser), completion: Some(completion) }
+            }
         } else {
             if let Some(result) = completion() {
                 p { id: "browser-status", role: "status", class: "mx-auto max-w-3xl px-6 pt-6",
