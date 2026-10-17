@@ -2034,6 +2034,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "firmica-validation"
+version = "0.1.0"
+dependencies = [
+ "der",
+ "openssl",
+ "sha2",
+ "thiserror 2.0.21",
+ "x509-cert",
+]
+
+[[package]]
 name = "flagset"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

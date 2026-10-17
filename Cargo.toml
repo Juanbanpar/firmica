@@ -12,6 +12,7 @@ members = [
     "crates/certificates",
     "crates/cades",
     "crates/key-worker",
+    "crates/validation",
 ]
 
 [workspace.dependencies]
@@ -27,6 +28,7 @@ firmica-signing = { path = "crates/signing" }
 firmica-certificates = { path = "crates/certificates" }
 firmica-cades = { path = "crates/cades" }
 firmica-key-worker = { path = "crates/key-worker" }
+firmica-validation = { path = "crates/validation" }
 openssl = "0.10.81"
 secrecy = "0.10.3"
 cryptoki = "0.12.1"

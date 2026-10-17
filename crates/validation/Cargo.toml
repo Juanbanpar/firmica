@@ -1,0 +1,14 @@
+[package]
+name = "firmica-validation"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+der = { version = "0.7", features = ["std"] }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std"] }
+sha2 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+openssl.workspace = true
