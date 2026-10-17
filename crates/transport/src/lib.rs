@@ -135,7 +135,22 @@ impl Session {
     }
 }
 
-/// Listener bound only to IPv4 loopback. Origin is an explicit local test setting,
+/// Checks that a setting is exactly one canonical HTTP(S) browser origin.
+/// Paths, credentials, queries, fragments and opaque origins are rejected.
+pub fn validate_origin(origin: &str) -> Result<(), TransportError> {
+    if origin.len() > 2048 {
+        return Err(TransportError::Origin);
+    }
+    let parsed = url::Url::parse(origin).map_err(|_| TransportError::Origin)?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.origin().ascii_serialization() != origin
+    {
+        return Err(TransportError::Origin);
+    }
+    Ok(())
+}
+
+/// Listener bound only to IPv4 loopback. Origin is an explicit local setting,
 /// never an identity supplied by the invocation. Server lifetime is at most 120 s.
 pub struct Server {
     listener: TcpListener,
@@ -150,11 +165,7 @@ impl Server {
         tls: Arc<rustls::ServerConfig>,
         origin: String,
     ) -> Result<Self, TransportError> {
-        if !(origin.starts_with("http://") || origin.starts_with("https://"))
-            || origin.contains(['\r', '\n'])
-        {
-            return Err(TransportError::Origin);
-        }
+        validate_origin(&origin)?;
         let mut last_error = None;
         for port in &bootstrap.ports {
             match TcpListener::bind((Ipv4Addr::LOCALHOST, *port)).await {
@@ -385,6 +396,31 @@ mod transfer_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_origin_settings_are_exact_and_canonical() {
+        for origin in [
+            "https://example.invalid",
+            "http://127.0.0.1:8080",
+            "https://example.invalid:8443",
+        ] {
+            assert!(validate_origin(origin).is_ok());
+        }
+        for origin in [
+            "null",
+            "file:///tmp",
+            "https://example.invalid/",
+            "https://example.invalid/path",
+            "https://user@example.invalid",
+            "https://example.invalid?query",
+            "https://example.invalid#fragment",
+            "https://example.invalid\r\n",
+            "https://example.invalid:443",
+            "https://EXAMPLE.invalid",
+            "https://example.invalid ",
+        ] {
+            assert!(validate_origin(origin).is_err(), "{origin:?}");
+        }
+    }
     #[test]
     fn wire_errors_are_version_specific() {
         let v4 = ProtocolVersion { major: 4, minor: 0 };

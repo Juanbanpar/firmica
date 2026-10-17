@@ -5,6 +5,8 @@ use views::{Diagnostics, Home};
 
 mod invocation;
 #[cfg(target_os = "linux")]
+mod local_tls;
+#[cfg(target_os = "linux")]
 mod signing;
 mod views;
 

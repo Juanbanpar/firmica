@@ -11,6 +11,7 @@ tokio.workspace = true
 futures-util = { version = "0.3", features = ["sink"] }
 tokio-tungstenite = "0.30"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

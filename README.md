@@ -2,7 +2,7 @@
 
 Rust electronic-signature client using Dioxus 0.7.10 and Tailwind CSS 4, targeting existing AutoFirma browser integrations.
 
-The Linux desktop application signs local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires an explicitly configured local TLS WebSocket listener and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
+The Linux desktop application signs local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires local TLS setup, browser trust and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
 
 ## Build
 
@@ -58,7 +58,20 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
-To enable the local WSS listener, supply a TLS certificate/key and an exact allowed browser origin to the first process:
+With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
+
+```sh
+firmica tls init --origin https://example.org
+firmica tls status
+```
+
+The commands work without a graphical session. The profile lives in `$XDG_CONFIG_HOME/firmica/browser-tls`, or `$HOME/.config/firmica/browser-tls` when `XDG_CONFIG_HOME` is unset. Its directories are private and its files have mode `0600`. Setup never replaces an existing profile. It creates a unique CA and a server certificate for `127.0.0.1`, valid for 365 days. The CA includes name constraints for `localhost` and `127.0.0.1`; its signing key is discarded after issuing the server certificate. Only the server key is stored.
+
+Setup prints the public `ca.pem` path and its SHA-256 fingerprint. Check that fingerprint before importing the CA into the intended browser profile for website authentication. In Firefox, use **Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import**. Firmica does not install trust entries, change TLS verification or register a default URI handler. Keep browser trust scoped to the profile that needs it.
+
+Restart Firmica after setup. The packaged `afirma` handler loads this profile automatically, including on a cold browser launch, and permits only the configured origin. To change websites, edit the profile's `origin` file to contain one exact HTTP(S) origin and restart. To renew an expired identity, stop Firmica, move the private `browser-tls` directory aside and run `tls init` again. Import the new CA and remove the old browser trust entry; renewal cannot reuse the discarded CA key. Missing, expired, mismatched or insecure profile files cause startup to fail.
+
+Explicit TLS settings override the per-user profile. Supply all three options to the first process:
 
 ```sh
 ./target/dx/firmica/release/linux/app/firmica \
@@ -71,7 +84,7 @@ On Linux, protocol 4.x WSS `sign` requests can return a signature after certific
 
 The signing screen fixes the document and signing choices from the request, shows their hash and the selected certificate, and warns that the request origin is unauthenticated. **Sign and send to browser** returns the reviewed certificate and CMS result to that session after worker cleanup; no destination file is written. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
 
-Browser certificate trust and URI-handler registration are not configured automatically. Do not install test certificates globally. Chromium tests pin one ephemeral public key. The Firefox OS-handler test trusts an ephemeral CA only in its disposable profile and checks that a fresh profile rejects it. Tests use an isolated XDG association without replacing the user's default handler.
+Do not install test certificates globally. Chromium tests pin one ephemeral public key. The Firefox OS-handler test provisions TLS with `firmica tls init`, trusts its CA only in a disposable profile and checks that a fresh profile rejects it. Tests use an isolated XDG association without replacing the user's default handler.
 
 ## Verify
 
@@ -103,10 +116,11 @@ FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run t
 FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:browser-signing
 npm run test:native-interop
 npm run test:os-handler
+FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:os-handler
 npm run test:lifecycle
 ```
 
-The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify RSA/P-256 output with OpenSSL, and check that worker failure and navigation cancellation return no signature. They include 1 MiB detached and 16 MiB attached documents, and reject oversized documents before opening a key. Transport tests require the OpenSSL CLI and exercise whole/fragmented messages, session authentication and size limits over ephemeral TLS connections.
+The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify RSA/P-256 output with OpenSSL, and check that worker failure and navigation cancellation return no signature. They include 1 MiB detached and 16 MiB attached documents, reject oversized documents before opening a key, and sign using an automatically loaded TLS profile. Provisioning tests check permissions, symlinks, concurrent setup, mismatched keys, expiry and certificate constraints. Transport tests require the OpenSSL CLI and exercise whole/fragmented messages, session authentication and size limits over ephemeral TLS connections.
 
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 

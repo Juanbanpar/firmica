@@ -31,25 +31,13 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
   const dir = await mkdtemp(path.join(tmpdir(), 'firmica-interop-'));
   const cert = path.join(dir, 'cert.pem');
   const key = path.join(dir, 'key.pem');
-  const trust = osHandlerMode ? path.join(dir,'ca.pem') : cert;
+  let trust = cert;
   // Ephemeral test key, never a document signing key. Trust is scoped to this browser process.
-  if (osHandlerMode) {
-    const caKey = path.join(dir,'ca.key');
-    const csr = path.join(dir,'server.csr');
-    const extensions = path.join(dir,'server.ext');
-    execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',caKey,'-out',trust,
-      '-days','1','-subj','/CN=Firmica ephemeral test CA','-addext','basicConstraints=critical,CA:TRUE',
-      '-addext','keyUsage=critical,keyCertSign,cRLSign'],{stdio:'ignore'});
-    execFileSync('openssl',['req','-newkey','rsa:2048','-nodes','-keyout',key,'-out',csr,'-subj','/CN=127.0.0.1'],{stdio:'ignore'});
-    await writeFile(extensions,'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n');
-    execFileSync('openssl',['x509','-req','-in',csr,'-CA',trust,'-CAkey',caKey,'-CAcreateserial',
-      '-days','1','-out',cert,'-extfile',extensions],{stdio:'ignore'});
-  } else {
+  if (!osHandlerMode) {
     execFileSync('openssl', ['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
   }
-  const pubkey = execFileSync('openssl', ['x509','-in',cert,'-pubkey','-noout']);
-  const spki = execFileSync('openssl', ['pkey','-pubin','-outform','DER'], { input: pubkey });
-  const pin = createHash('sha256').update(spki).digest('base64');
+  const pin = osHandlerMode ? undefined : createHash('sha256').update(execFileSync('openssl',
+    ['pkey','-pubin','-outform','DER'], {input:execFileSync('openssl',['x509','-in',cert,'-pubkey','-noout'])})).digest('base64');
   const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>AutoScript interoperability test</title>
     <button id="sign">Request signature</button><a id="warm" href="afirma://cosign?ver=4&format=CAdES">Warm invocation</a>
     <output id="result"></output><script src="/autoscript.js"></script><script>
@@ -81,16 +69,24 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
       const data = path.join(dir, 'data');
       const config = path.join(dir, 'config');
       await Promise.all([mkdir(profile), mkdir(path.join(data,'applications'),{recursive:true}), mkdir(config)]);
+      let binary = process.env.FIRMICA_DESKTOP || path.join(root,'target/dx/firmica/release/linux/app/firmica');
+      let entry = `[Desktop Entry]\nType=Application\nName=Firmica interoperability test\nExec=firmica %u\nMimeType=x-scheme-handler/afirma;\nTerminal=false\n`;
+      if (process.env.FIRMICA_DEB) {
+        const payload = path.join(dir,'payload'); await mkdir(payload);
+        execFileSync('tar',['-xz','-C',payload],{input:execFileSync('ar',['p',path.resolve(process.env.FIRMICA_DEB),'data.tar.gz'],{maxBuffer:128*1024*1024})});
+        binary = path.join(payload,'usr/bin/firmica');
+        entry = await readFile(path.join(payload,'usr/share/applications/firmica.desktop'),'utf8');
+      }
+      assert.match(entry,/^Exec=firmica %u$/m);
+      execFileSync(binary,['tls','init','--origin',origin],{env:{...process.env,XDG_CONFIG_HOME:config},stdio:'pipe'});
+      trust = path.join(config,'firmica/browser-tls/ca.pem');
       // Trust only this test certificate, only in the disposable Firefox profile.
       execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
       execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Firmica ephemeral WSS','-t','C,,','-i',trust]);
-      const binary = process.env.FIRMICA_DESKTOP || path.join(root,'target/dx/firmica/release/linux/app/firmica');
-      const quote = value => `"${value.replaceAll('\\','\\\\').replaceAll('"','\\"').replaceAll('%','%%')}"`;
-      await writeFile(path.join(data,'applications','firmica-interop.desktop'),
-        `[Desktop Entry]\nType=Application\nName=Firmica interoperability test\nExec=${[binary,'--tls-cert',cert,'--tls-key',key,'--origin',origin].map(quote).join(' ')} %u\nMimeType=x-scheme-handler/afirma;\nTerminal=false\n`);
+      await writeFile(path.join(data,'applications','firmica-interop.desktop'),entry);
       await writeFile(path.join(config,'mimeapps.list'),'[Default Applications]\nx-scheme-handler/afirma=firmica-interop.desktop\n');
       const env = {...process.env, GDK_BACKEND:'x11', XDG_RUNTIME_DIR:runtime, XDG_DATA_HOME:data,
-        XDG_CONFIG_HOME:config, WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${inspectorPort}`};
+        XDG_CONFIG_HOME:config, PATH:`${path.dirname(binary)}:${process.env.PATH}`, WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${inspectorPort}`};
       handlerEnv = env;
       execFileSync('update-desktop-database',[path.join(data,'applications')],{env});
       assert.match(execFileSync('gio',['mime','x-scheme-handler/afirma'],{env,encoding:'utf8'}),/firmica-interop\.desktop/);
@@ -239,8 +235,8 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
     if (osHandlerMode) {
       const executable = (await readFile(`/proc/${osAppPid}/cmdline`,'utf8')).split('\0')[0];
       Object.assign(report, {platform:process.platform, applicationSha256:createHash('sha256').update(await readFile(executable)).digest('hex'),
-        tls:'ephemeral CA trusted in one disposable Firefox profile; fresh profile rejects it',
-        scope:'protocol 4 cancellation and direct warm URI; scheme preapproved; default permission UX, signing and production TLS provisioning unverified'});
+        tls:'Firmica-generated per-user profile; CA trusted only in a disposable Firefox profile; fresh profile rejects it',
+        scope:'protocol 4 cancellation and direct warm URI with automatic TLS profile loading; scheme preapproved; default permission UX and system trust installation unverified'});
       await page.screenshot({path:path.join(osArtifacts,'browser-cancelled.png')});
       if(process.env.FIRMICA_SCREENSHOT) {
         const window = execFileSync('xdotool',['search','--onlyvisible','--name','^Firmica'],{encoding:'utf8'}).trim().split('\n')[0];

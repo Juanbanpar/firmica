@@ -30,9 +30,9 @@ secrecy.workspace = true
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 tempfile = "3"
 der = { version = "0.7", features = ["std"] }
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
 openssl.workspace = true
+thiserror.workspace = true
+x509-cert = "0.2.5"
 
 [features]
 default = ["desktop"]

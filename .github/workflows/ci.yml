@@ -145,6 +145,8 @@ jobs:
         run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:browser-signing
       - run: npm run test:native-interop
       - run: npm run test:os-handler
+      - name: Verify cold browser invocation with the Debian TLS profile
+        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:os-handler
       - run: npm run test:lifecycle
 
   audit:

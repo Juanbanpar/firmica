@@ -12,11 +12,17 @@ pub fn inbox() -> Inbox {
 }
 
 #[derive(Parser)]
-#[command(about = "Firmica electronic-signature client")]
+#[command(
+    about = "Firmica electronic-signature client",
+    args_conflicts_with_subcommands = true
+)]
 struct Arguments {
+    #[cfg(target_os = "linux")]
+    #[command(subcommand)]
+    command: Option<LocalCommand>,
     /// Optional afirma:// invocation; it is parsed but never executed as a command.
     uri: Option<String>,
-    /// Enable the restricted WSS prototype with an explicit test certificate.
+    /// Override the per-user WSS profile with an explicit certificate and key.
     #[arg(long, requires_all = ["tls_key", "origin"])]
     tls_cert: Option<PathBuf>,
     #[arg(long, requires = "tls_cert")]
@@ -25,8 +31,22 @@ struct Arguments {
     origin: Option<String>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(clap::Subcommand)]
+enum LocalCommand {
+    /// Configure local browser TLS without modifying any trust store.
+    Tls {
+        #[command(subcommand)]
+        command: crate::local_tls::Command,
+    },
+}
+
 pub fn launch(app: fn() -> Element) -> Result<(), String> {
     let args = Arguments::parse();
+    #[cfg(target_os = "linux")]
+    if let Some(LocalCommand::Tls { command }) = args.command {
+        return crate::local_tls::execute(command).map_err(|e| e.to_string());
+    }
     if let Some(uri) = &args.uri {
         ProtocolRequest::parse(uri).map_err(|e| e.to_string())?;
     }
@@ -37,14 +57,33 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
         None => return Ok(()),
     };
     let runtime = tokio::runtime::Runtime::new().map_err(|_| "cannot start async runtime")?;
-    let tls = match (&args.tls_cert, &args.tls_key) {
-        (Some(cert), Some(key)) => {
-            Some(firmica_transport::load_tls(cert, key).map_err(|e| e.to_string())?)
+    let origin = args.origin;
+    if let Some(origin) = &origin {
+        firmica_transport::validate_origin(origin).map_err(|e| e.to_string())?;
+    }
+    let (tls, origin) = match (&args.tls_cert, &args.tls_key) {
+        (Some(cert), Some(key)) => (
+            Some(firmica_transport::load_tls(cert, key).map_err(|e| e.to_string())?),
+            origin,
+        ),
+        _ => {
+            #[cfg(target_os = "linux")]
+            if let Some(profile) = crate::local_tls::load_default().map_err(|e| e.to_string())? {
+                (
+                    Some(
+                        firmica_transport::load_tls(&profile.certificate, &profile.key)
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    Some(profile.origin),
+                )
+            } else {
+                (None, None)
+            }
+            #[cfg(not(target_os = "linux"))]
+            (None, None)
         }
-        _ => None,
     };
     let initial = args.uri;
-    let origin = args.origin;
     runtime.spawn(async move {
         let mut receiver = receiver;
         let mut server_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -60,7 +99,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                     continue;
                 }
                 let Some(tls) = tls.clone() else {
-                    eprintln!("Firmica: WSS requires explicit TLS configuration");
+                    eprintln!("Firmica: WSS requires TLS configuration");
                     continue;
                 };
                 let Some(origin) = origin.clone() else {
@@ -73,7 +112,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                 let server = match Server::bind(bootstrap, tls, origin).await {
                     Ok(server) => server,
                     Err(_) => {
-                        eprintln!("Firmica: cannot bind WSS test listener");
+                        eprintln!("Firmica: cannot bind WSS listener");
                         continue;
                     }
                 };
@@ -160,6 +199,41 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::{sync::oneshot, time::timeout};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn provisioning_commands_are_separate_from_invocation_arguments() {
+        assert!(Arguments::try_parse_from([
+            "firmica",
+            "tls",
+            "init",
+            "--origin",
+            "https://example.invalid"
+        ])
+        .is_ok());
+        assert!(Arguments::try_parse_from(["firmica", "tls", "status"]).is_ok());
+        assert!(Arguments::try_parse_from(["firmica", "afirma://save?ver=4"]).is_ok());
+        assert!(Arguments::try_parse_from([
+            "firmica",
+            "--tls-cert",
+            "cert",
+            "--tls-key",
+            "key",
+            "--origin",
+            "https://example.invalid",
+            "afirma://websocket?v=4"
+        ])
+        .is_ok());
+        assert!(Arguments::try_parse_from([
+            "firmica",
+            "tls",
+            "init",
+            "--origin",
+            "https://example.invalid",
+            "afirma://save?ver=4"
+        ])
+        .is_err());
+    }
 
     fn pending() -> (PendingRequest, oneshot::Receiver<Decision>) {
         let (reply, response) = oneshot::channel();

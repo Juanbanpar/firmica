@@ -1135,8 +1135,10 @@ dependencies = [
  "rustix",
  "secrecy",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "ui",
+ "x509-cert",
 ]
 
 [[package]]
@@ -2050,6 +2052,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]

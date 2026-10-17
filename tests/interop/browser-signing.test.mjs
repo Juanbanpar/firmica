@@ -17,11 +17,12 @@ const password = 'synthetic-browser-password';
 const smallContent = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document']) {
+for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls']) {
   test(`Firefox AutoScript signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'firmica-browser-signing-'));
     const openssl = args => execFileSync('openssl', args, {cwd:dir, stdio:['ignore','pipe','pipe']});
     const ec = scenario === 'ec';
+    const managed = scenario === 'managed-tls';
     const attached = ec || scenario === 'large-attached';
     const content = scenario === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
       : scenario === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
@@ -49,33 +50,48 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detache
       const config = path.join(dir, 'config');
       const profile = path.join(dir, 'firefox');
       await Promise.all([mkdir(runtime,{mode:0o700}), mkdir(path.join(data,'applications'),{recursive:true}), mkdir(config), mkdir(profile)]);
-      openssl(['req','-x509','-newkey','rsa:2048','-nodes','-keyout','ca.key','-out','ca.pem','-days','1','-subj','/CN=Synthetic local TLS CA',
-        '-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign']);
-      openssl(['req','-newkey','rsa:2048','-nodes','-keyout','tls.key','-out','tls.csr','-subj','/CN=127.0.0.1']);
-      await writeFile(path.join(dir,'tls.ext'), 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n');
-      openssl(['x509','-req','-in','tls.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-days','1','-out','tls.pem','-extfile','tls.ext']);
+      if (!managed) {
+        openssl(['req','-x509','-newkey','rsa:2048','-nodes','-keyout','ca.key','-out','ca.pem','-days','1','-subj','/CN=Synthetic local TLS CA',
+          '-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign']);
+        openssl(['req','-newkey','rsa:2048','-nodes','-keyout','tls.key','-out','tls.csr','-subj','/CN=127.0.0.1']);
+        await writeFile(path.join(dir,'tls.ext'), 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n');
+        openssl(['x509','-req','-in','tls.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-days','1','-out','tls.pem','-extfile','tls.ext']);
+      }
       openssl(['req','-x509','-newkey',ec ? 'ec' : 'rsa:2048', ...(ec ? ['-pkeyopt','ec_paramgen_curve:prime256v1'] : []),
         '-nodes','-keyout','signer.key','-out','signer.pem','-days','1','-subj','/CN=Firmica synthetic browser signer',
         '-addext','basicConstraints=critical,CA:FALSE','-addext','keyUsage=critical,digitalSignature']);
       openssl(['pkcs12','-export','-inkey','signer.key','-in','signer.pem','-out','signer.p12','-passout',`pass:${password}`]);
       await writeFile(path.join(dir,'reference.bin'), content);
-      execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
-      execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Synthetic local WSS','-t','C,,','-i',path.join(dir,'ca.pem')]);
       let binary = path.resolve(process.env.FIRMICA_DESKTOP || path.join(root,'target/dx/firmica/release/linux/app/firmica'));
       if (process.env.FIRMICA_DEB) {
         const payload = path.join(dir,'payload'); await mkdir(payload);
         execFileSync('tar',['-xz','-C',payload],{input:execFileSync('ar',['p',path.resolve(process.env.FIRMICA_DEB),'data.tar.gz'],{maxBuffer:128*1024*1024})});
         binary = path.join(payload,'usr/bin/firmica');
       }
-      const flags = ['--tls-cert',path.join(dir,'tls.pem'),'--tls-key',path.join(dir,'tls.key'),'--origin',origin];
+      if (managed) {
+        const options = {env:{...process.env,XDG_CONFIG_HOME:config},encoding:'utf8',stdio:['ignore','pipe','pipe']};
+        const output = execFileSync(binary,['tls','init','--origin',origin],options);
+        assert.equal(execFileSync(binary,['tls','status'],options),output);
+        const fingerprint = openssl(['x509','-in',path.join(config,'firmica/browser-tls/ca.pem'),'-noout','-sha256','-fingerprint']).toString().trim().split('=').at(-1);
+        assert.ok(output.includes(`CA SHA-256: ${fingerprint}`));
+        assert.ok(output.includes(`Origin: ${origin}`));
+      }
+      execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
+      execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Synthetic local WSS','-t','C,,','-i',
+        managed ? path.join(config,'firmica/browser-tls/ca.pem') : path.join(dir,'ca.pem')]);
+      const flags = managed ? [] : ['--tls-cert',path.join(dir,'tls.pem'),'--tls-key',path.join(dir,'tls.key'),'--origin',origin];
       const quote = value => `"${value.replaceAll('\\','\\\\').replaceAll('"','\\"').replaceAll('%','%%')}"`;
-      await writeFile(path.join(data,'applications','firmica-test.desktop'), `[Desktop Entry]\nType=Application\nName=Firmica test\nExec=${[binary,...flags].map(quote).join(' ')} %u\nMimeType=x-scheme-handler/afirma;\nTerminal=false\n`);
+      const entry = managed && process.env.FIRMICA_DEB
+        ? await readFile(path.join(dir,'payload/usr/share/applications/firmica.desktop'),'utf8')
+        : `[Desktop Entry]\nType=Application\nName=Firmica test\nExec=${[binary,...flags].map(quote).join(' ')} %u\nMimeType=x-scheme-handler/afirma;\nTerminal=false\n`;
+      if (managed && process.env.FIRMICA_DEB) assert.match(entry,/^Exec=firmica %u$/m);
+      await writeFile(path.join(data,'applications','firmica-test.desktop'),entry);
       await writeFile(path.join(config,'mimeapps.list'), '[Default Applications]\nx-scheme-handler/afirma=firmica-test.desktop\n');
       const bus = path.join(dir,'bus.conf');
       await writeFile(bus, `<busconfig><type>session</type><listen>unix:tmpdir=${runtime}</listen><auth>EXTERNAL</auth><policy context="default"><allow user="*"/><allow send_destination="*" eavesdrop="true"/><allow receive_sender="*" eavesdrop="true"/><allow own="*"/></policy></busconfig>`);
       const port = await freePort();
       const env = {...process.env, GDK_BACKEND:'x11', XDG_RUNTIME_DIR:runtime, XDG_SESSION_TYPE:'x11', LC_ALL:'C.UTF-8',
-        XDG_DATA_HOME:data, XDG_CONFIG_HOME:config, XDG_CACHE_HOME:path.join(dir,'cache'), WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${port}`};
+        XDG_DATA_HOME:data, XDG_CONFIG_HOME:config, XDG_CACHE_HOME:path.join(dir,'cache'), PATH:`${path.dirname(binary)}:${process.env.PATH}`, WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${port}`};
       execFileSync('update-desktop-database',[path.join(data,'applications')],{env});
       child = spawn('xvfb-run',['-a','-s','-screen 0 1280x1100x24','sh','-c','openbox >/dev/null 2>&1 & exec "$@"','test-wm',
         'dbus-run-session','--config-file',bus,'--','sh','-c',
