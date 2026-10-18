@@ -62,9 +62,17 @@ async fn establish(
     if let Some(uri) = uri {
         ProtocolRequest::parse(uri).map_err(|_| io::ErrorKind::InvalidInput)?;
     }
-    match create_server(name, sid) {
-        Ok(server) => Ok(Some(Instance(tokio::spawn(listen(server, incoming))))),
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+    match create_server(name, sid, true) {
+        Ok(server) => Ok(Some(Instance(tokio::spawn(listen(
+            server,
+            name.to_owned(),
+            sid.to_owned(),
+            incoming,
+        ))))),
+        Err(error)
+            if error.kind() == io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) =>
+        {
             // FIRST_PIPE_INSTANCE also returns access denied when another server
             // exists. Do not start a second UI or fall back to a public endpoint.
             timeout(IO_TIMEOUT, forward(name, sid, uri))
@@ -76,7 +84,7 @@ async fn establish(
     }
 }
 
-fn create_server(name: &str, sid: &str) -> io::Result<NamedPipeServer> {
+fn create_server(name: &str, sid: &str, first: bool) -> io::Result<NamedPipeServer> {
     let sddl = format!("D:P(A;;GA;;;{sid})\0")
         .encode_utf16()
         .collect::<Vec<_>>();
@@ -104,8 +112,7 @@ fn create_server(name: &str, sid: &str) -> io::Result<NamedPipeServer> {
     // returns; neither pointer is retained by Windows or Tokio.
     unsafe {
         ServerOptions::new()
-            .first_pipe_instance(true)
-            .max_instances(1)
+            .first_pipe_instance(first)
             .reject_remote_clients(true)
             .in_buffer_size(MAX_URI_BYTES as u32 + 4)
             .out_buffer_size(1)
@@ -116,14 +123,17 @@ fn create_server(name: &str, sid: &str) -> io::Result<NamedPipeServer> {
     }
 }
 
-async fn listen(mut server: NamedPipeServer, incoming: Sender<String>) {
+async fn listen(mut server: NamedPipeServer, name: String, sid: String, incoming: Sender<String>) {
     while server.connect().await.is_ok() {
-        let _ = timeout(IO_TIMEOUT, receive(&mut server, &incoming)).await;
-        // Reuse the original handle: the exclusive name never disappears between
-        // clients. A stalled or malformed client is disconnected after its deadline.
-        if server.disconnect().is_err() {
+        // Mio keeps read/error state on a disconnected handle. Use Tokio's
+        // documented listener pattern: create the next pipe before dropping the
+        // connected one, keeping the name continuously owned by this process.
+        let Ok(next) = create_server(&name, &sid, false) else {
             break;
-        }
+        };
+        let mut connected = std::mem::replace(&mut server, next);
+        let _ = timeout(IO_TIMEOUT, receive(&mut connected, &incoming)).await;
+        let _ = connected.disconnect();
     }
 }
 
@@ -322,12 +332,17 @@ mod tests {
         assert!(instance.is_some());
         let status = timeout(
             Duration::from_secs(10),
-            child(&name, &sid, "forward").status(),
+            child(&name, &sid, "forward").output(),
         )
         .await
         .unwrap()
         .unwrap();
-        assert!(status.success());
+        assert!(
+            status.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
         assert_eq!(receiver.recv().await.unwrap(), URI);
         sender.try_send("occupied".into()).unwrap();
         assert_eq!(
@@ -395,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn a_nonresponsive_server_cannot_stall_the_client() {
         let (name, sid) = identity();
-        let _server = create_server(&name, &sid).unwrap();
+        let _server = create_server(&name, &sid, true).unwrap();
         let (sender, _) = mpsc::channel(8);
         assert_eq!(
             establish(&name, &sid, Some(URI), sender)
@@ -415,7 +430,7 @@ mod tests {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         timeout(Duration::from_secs(10), async {
             while let Some(line) = lines.next_line().await.unwrap() {
-                if line == "FIRMICA_PIPE_READY" {
+                if line.ends_with("FIRMICA_PIPE_READY") {
                     return;
                 }
             }
@@ -457,7 +472,7 @@ mod tests {
             System::Threading::GetCurrentProcess,
         };
         let (name, sid) = identity();
-        let _server = create_server(&name, &sid).unwrap();
+        let _server = create_server(&name, &sid, true).unwrap();
         let text = format!("{sid}\0").encode_utf16().collect::<Vec<_>>();
         let mut sid = ptr::null_mut();
         let mut token = ptr::null_mut();

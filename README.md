@@ -58,7 +58,7 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
-On Windows, `firmica.exe 'afirma://…'` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Windows local signing remains unavailable, and installer URI-handler registration is not verified.
+On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Windows local signing remains unavailable, and installer URI-handler registration is not verified.
 
 With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
 
