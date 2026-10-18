@@ -53,6 +53,7 @@ def main():
 
     if system == "Windows":
         shutil.copy2(ROOT / "LICENSE", application / "LICENSE")
+        shutil.copy2(ROOT / "tools/windows/handler.ps1", application / "handler.ps1")
         root = Path(os.environ["OPENSSL_DIR"])
         for name in ("libcrypto-3-x64.dll", "libssl-3-x64.dll"):
             candidates = [directory / name for directory in (root / "bin", root)]

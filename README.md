@@ -52,7 +52,7 @@ python tools/build-desktop.py build
 python tools/build-desktop.py bundle
 ```
 
-The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the distribution's license from `OPENSSL_DIR` beside the application and worker. The ZIP is written under `target/dx/firmica/bundle/windows/`; extract it to a trusted directory and keep its contents together. WebView2 and the MSVC runtime must be installed separately. Update the bundled OpenSSL DLLs when rebuilding with security fixes. This portable bundle does not register an `afirma` URI handler. Windows dialogs use `rfd`; selected documents must be regular files, and file reparse points are rejected. Local signing is unavailable on macOS and mobile.
+The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the distribution's license from `OPENSSL_DIR` beside the application and worker. The ZIP is written under `target/dx/firmica/bundle/windows/`; extract it to a trusted directory and keep its contents together. WebView2 and the MSVC runtime must be installed separately. Update the bundled OpenSSL DLLs when rebuilding with security fixes. Registration is an explicit per-user step using the included `handler.ps1`; extracting the ZIP does not change associations. Windows dialogs use `rfd`; selected documents must be regular files, and file reparse points are rejected. Local signing is unavailable on macOS and mobile.
 
 ## Local signing
 
@@ -72,7 +72,18 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
-On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. The portable bundle does not register an OS URI handler. Browser signing on Windows requires explicit `--tls-cert`, `--tls-key` and `--origin` arguments; automatic TLS-profile setup is available on Linux.
+On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Register the extracted Windows bundle from its directory after preparing a loopback TLS certificate and key in a private directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Install -TlsCertificate 'C:\private\tls.pem' -TlsKey 'C:\private\tls.key' -Origin 'https://example.org'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Status
+# Before removing or moving this bundle:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Uninstall
+```
+
+Registration adds Firmica to this user's applications and uses the quoted bundle executable with the supplied TLS configuration for cold launches. An existing `afirma` handler and protected Windows default choices are preserved; select Firmica for `afirma` in **Settings > Apps > Default apps** when another application is selected. Uninstall removes only this bundle's registration. Re-register after moving the bundle. Static installation/TLS paths containing percent signs are rejected because Windows uses percent sequences as association placeholders.
+
+The TLS key must remain private, the certificate must cover `127.0.0.1`, and the requesting browser must trust its issuer. Registration does not install trust or generate keys. Automatic TLS-profile setup is available on Linux. Windows can also be launched directly with `--tls-cert`, `--tls-key` and `--origin`.
 
 With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
 

@@ -62,6 +62,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify per-user Windows handler registration
+        if: runner.os == 'Windows'
+        run: python tests/interop/windows-handler-test.py --script tools/windows/handler.ps1
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - name: Install Linux WebView dependencies
