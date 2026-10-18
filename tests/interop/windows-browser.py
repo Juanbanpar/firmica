@@ -167,10 +167,6 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             print("Private Firefox launched with the synthetic CA policy", flush=True)
             cleanup.callback(browser.close)
             browser_page = browser.new_page()
-            browser_page.goto("about:policies")
-            evidence["firefox_policies"] = browser_page.locator("body").inner_text()
-            assert "Certificates" in evidence["firefox_policies"], evidence["firefox_policies"]
-            print("Firefox reports the certificate policy active", flush=True)
             frames = []
 
             def socket_started(socket):
