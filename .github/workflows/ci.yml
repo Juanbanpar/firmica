@@ -98,6 +98,18 @@ jobs:
           with open(os.environ["GITHUB_PATH"], "a") as output:
               output.write(str(install) + "\n")
           subprocess.run([str(executable), "--version"], check=True)
+      - name: Configure Windows system OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramFiles 'OpenSSL'
+          $libraries = Join-Path $root 'lib\VC\x64\MD'
+          if (!(Test-Path "$libraries\libcrypto.lib") -or !(Test-Path "$libraries\libssl.lib")) {
+            throw "OpenSSL x64 import libraries missing at $libraries"
+          }
+          "OPENSSL_DIR=$root" >> $env:GITHUB_ENV
+          "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
+          "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
       - run: dx build --locked --package desktop --platform desktop
       # Generates mobile assets and checks its host entry point; not a native mobile build.
       - run: dx build --locked --package mobile --platform desktop --features mobile

@@ -15,12 +15,10 @@ use openssl::{
     },
 };
 use secrecy::ExposeSecret;
-use std::{
-    collections::BTreeSet,
-    fs,
-    os::unix::fs::{symlink, MetadataExt},
-    process::Command,
-};
+use std::{collections::BTreeSet, fs, process::Command};
+
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::{symlink, MetadataExt};
 
 const PASSWORD: &str = "synthetic test only";
 const DOCUMENT: &[u8] = b"Frozen local document\x00\xff\r\n";
@@ -46,13 +44,16 @@ fn bounded_reads_reject_nonregular_and_oversize_inputs() {
         read_bounded(&temp.path().join("absent"), 1024),
         Err(Error::ReadInput)
     ));
-    let fifo = temp.path().join("pipe");
-    assert!(Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap()
-        .success());
-    assert!(matches!(read_bounded(&fifo, 1024), Err(Error::ReadInput)));
+    #[cfg(target_os = "linux")]
+    {
+        let fifo = temp.path().join("pipe");
+        assert!(Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(matches!(read_bounded(&fifo, 1024), Err(Error::ReadInput)));
+    }
 }
 
 #[test]
@@ -62,12 +63,14 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
     let target = temp.path().join("result.csig");
     save_new(&target, DOCUMENT, &active).unwrap();
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
+    #[cfg(target_os = "linux")]
     assert_eq!(target.metadata().unwrap().mode() & 0o777, 0o600);
     assert!(matches!(
         save_new(&target, b"replacement", &active),
         Err(Error::DestinationExists)
     ));
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
+    #[cfg(target_os = "linux")]
     for (name, destination) in [
         ("link", target.clone()),
         ("dangling", temp.path().join("absent")),
@@ -88,7 +91,7 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
     assert!(!cancelled.exists());
     assert_eq!(
         fs::read_dir(temp.path()).unwrap().count(),
-        3,
+        if cfg!(windows) { 1 } else { 3 },
         "temporary outputs must be removed"
     );
 }
@@ -174,6 +177,7 @@ fn open(
         mode,
     )
 }
+#[cfg(target_os = "linux")]
 fn children() -> BTreeSet<u32> {
     fs::read_dir("/proc/self/task")
         .unwrap()
@@ -185,6 +189,71 @@ fn children() -> BTreeSet<u32> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+#[cfg(windows)]
+fn children() -> BTreeSet<u32> {
+    let query = format!(
+        "Get-CimInstance Win32_Process -Filter \"ParentProcessId = {} AND Name = 'firmica-key-worker.exe'\" | Select-Object -ExpandProperty ProcessId",
+        std::process::id()
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|pid| pid.parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn worker_discovery_is_beside_the_application_and_rejects_nonfiles() {
+    let temp = tempfile::tempdir().unwrap();
+    let application = temp.path().join(if cfg!(windows) {
+        "firmica.exe"
+    } else {
+        "firmica"
+    });
+    fs::write(&application, b"synthetic application").unwrap();
+    let worker = temp.path().join(if cfg!(windows) {
+        "firmica-key-worker.exe"
+    } else {
+        "firmica-key-worker"
+    });
+    assert!(matches!(
+        worker_beside(&application),
+        Err(Error::MissingWorker)
+    ));
+    fs::create_dir(&worker).unwrap();
+    assert!(matches!(
+        worker_beside(&application),
+        Err(Error::MissingWorker)
+    ));
+    fs::remove_dir(&worker).unwrap();
+    fs::write(&worker, b"synthetic worker").unwrap();
+    assert_eq!(worker_beside(&application).unwrap(), worker);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(matches!(
+            worker_beside(&application),
+            Err(Error::MissingWorker)
+        ));
+        fs::remove_file(&worker).unwrap();
+        symlink(&application, &worker).unwrap();
+        assert!(matches!(
+            worker_beside(&application),
+            Err(Error::MissingWorker)
+        ));
+    }
 }
 
 #[test]
@@ -301,15 +370,39 @@ fn worker_failure_blocks_publication_and_is_reaped() {
     let before = children();
     let pending = open(temp.path(), EC, ContentMode::Attached).unwrap();
     let pid = *children().difference(&before).next().unwrap();
+    #[cfg(target_os = "linux")]
     rustix::process::kill_process(
         rustix::process::Pid::from_raw(pid as i32).unwrap(),
         rustix::process::Signal::KILL,
     )
     .unwrap();
+    #[cfg(windows)]
+    assert!(Command::new("taskkill.exe")
+        .args(["/F", "/PID", &pid.to_string()])
+        .status()
+        .unwrap()
+        .success());
     assert!(matches!(
         pending.sign_and_save(&temp.path().join("failed.csig"), &AtomicBool::new(false)),
         Err(Error::Worker(_))
     ));
     assert!(!temp.path().join("failed.csig").exists());
     assert_eq!(children(), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_device_and_pipe_paths_are_rejected_before_opening() {
+    for path in [
+        r"\\.\pipe\firmica-input",
+        r"\\localhost\pipe\firmica-input",
+        r"\\?\UNC\localhost\pipe\firmica-input",
+        "NUL",
+        "C:relative",
+    ] {
+        assert!(matches!(
+            read_bounded(Path::new(path), 1024),
+            Err(Error::ReadInput)
+        ));
+    }
 }

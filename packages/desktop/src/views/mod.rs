@@ -1,11 +1,11 @@
 mod home;
 pub use home::Home;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod signing;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 pub use signing::LocalSigning;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 #[component]
 pub fn LocalSigning() -> Element {
     rsx! { main { class: "mx-auto max-w-3xl p-6 sm:p-12",

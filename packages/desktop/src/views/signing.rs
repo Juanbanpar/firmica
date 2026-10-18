@@ -243,7 +243,7 @@ pub fn LocalSigning(
                                         return;
                                     }
                                     let filename = prepared.peek().as_ref().map(|pending| format!("{}.csig", pending.review().document_name())).unwrap_or_else(|| "signature.csig".into());
-                                    let destination = rfd::AsyncFileDialog::new().set_file_name(filename).add_filter("CAdES", &["csig"]).save_file().await;
+                                    let destination = file_dialog().set_file_name(filename).add_filter("CAdES", &["csig"]).save_file().await;
                                     if let Some(destination) = destination {
                                         let pending = prepared.write().take();
                                         if let Some(pending) = pending {
@@ -283,15 +283,11 @@ pub fn LocalSigning(
                 div { class: "space-y-5",
                     if !external {
                     label { class: "block", {tr(spanish, "Documento (hasta 16 MiB)", "Document (up to 16 MiB)")}
-                        input { id: "sign-document", class: FIELD, r#type: "file", disabled: busy(),
-                            onchange: move |event| document.set(event.files().into_iter().next().map(|file| file.path())),
-                        }
+                        FileSelection { id: "sign-document", selected: document, busy, certificate: false, spanish }
                     }
                     }
                     label { class: "block", {tr(spanish, "Certificado PKCS#12 (hasta 8 MiB)", "PKCS#12 certificate (up to 8 MiB)")}
-                        input { id: "sign-certificate", class: FIELD, r#type: "file", accept: ".p12,.pfx", disabled: busy(),
-                            onchange: move |event| certificate.set(event.files().into_iter().next().map(|file| file.path())),
-                        }
+                        FileSelection { id: "sign-certificate", selected: certificate, busy, certificate: true, spanish }
                     }
                     label { class: "block", {tr(spanish, "Contraseña del certificado", "Certificate password")}
                         // A keyed dynamic child replaces the actual input on submission,
@@ -351,6 +347,59 @@ pub fn LocalSigning(
                         }, {tr(spanish, "Abrir y revisar", "Open and review")}
                     }
                 }
+            }
+        }
+    }
+}
+
+fn file_dialog() -> rfd::AsyncFileDialog {
+    let dialog = rfd::AsyncFileDialog::new();
+    #[cfg(windows)]
+    let dialog = dialog.set_parent(dioxus::desktop::window().window.as_ref());
+    dialog
+}
+
+#[component]
+fn FileSelection(
+    id: &'static str,
+    mut selected: Signal<Option<PathBuf>>,
+    mut busy: Signal<bool>,
+    certificate: bool,
+    spanish: bool,
+) -> Element {
+    // Linux's WebView picker retains its portal/zenity fallback. Windows uses
+    // the same rfd dependency as saving, with a native parented item dialog.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = spanish;
+        rsx! { input { id, class: FIELD, r#type: "file",
+            accept: if certificate { ".p12,.pfx" } else { "" }, disabled: busy(),
+            onchange: move |event| selected.set(event.files().into_iter().next().map(|file| file.path())),
+        } }
+    }
+    #[cfg(windows)]
+    {
+        let name = selected
+            .read()
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        rsx! {
+            button { id, class: FIELD, r#type: "button", disabled: busy(),
+                onclick: move |_| {
+                    if busy() { return; }
+                    busy.set(true);
+                    let mut dialog = file_dialog();
+                    if certificate { dialog = dialog.add_filter("PKCS#12", &["p12", "pfx"]); }
+                    spawn(async move {
+                        if let Some(file) = dialog.pick_file().await {
+                            selected.set(Some(file.path().to_owned()));
+                        }
+                        busy.set(false);
+                    });
+                },
+                if let Some(name) = name { "{name}" }
+                else { {tr(spanish, "Seleccionar archivo…", "Choose file…")} }
             }
         }
     }

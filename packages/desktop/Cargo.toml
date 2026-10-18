@@ -22,6 +22,8 @@ clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["process", "fs"] }
+
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
 firmica-key-worker.workspace = true
 firmica-signing.workspace = true
 firmica-cades.workspace = true
@@ -35,7 +37,7 @@ thiserror.workspace = true
 x509-cert = "0.2.5"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 tokio = { workspace = true, features = ["process"] }

@@ -8,11 +8,13 @@ use firmica_protocol::signing::SignResponse;
 use firmica_signing::{SignatureAlgorithm, SigningKey};
 use secrecy::{ExposeSecretMut, SecretBox, SecretString};
 use std::{
-    fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
+
+#[cfg(target_os = "linux")]
+use std::fs::File;
 
 const MAX_CONTAINER_BYTES: usize = 8 * 1024 * 1024;
 
@@ -34,21 +36,42 @@ pub enum Error {
 /// A trusted installation must protect both executables from modification.
 pub fn packaged_worker() -> Result<PathBuf, Error> {
     let application = std::env::current_exe().map_err(|_| Error::MissingWorker)?;
+    worker_beside(&application)
+}
+
+fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
     let path = application
         .parent()
         .ok_or(Error::MissingWorker)?
-        .join("firmica-key-worker");
+        .join(if cfg!(windows) {
+            "firmica-key-worker.exe"
+        } else {
+            "firmica-key-worker"
+        });
     let metadata = path.symlink_metadata().map_err(|_| Error::MissingWorker)?;
-    use std::os::unix::fs::MetadataExt;
-    if !metadata.is_file()
-        || metadata.mode() & 0o022 != 0
-        || metadata.uid()
-            != application
-                .metadata()
-                .map_err(|_| Error::MissingWorker)?
-                .uid()
-    {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(Error::MissingWorker);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.mode() & 0o022 != 0
+            || metadata.uid()
+                != application
+                    .metadata()
+                    .map_err(|_| Error::MissingWorker)?
+                    .uid()
+        {
+            return Err(Error::MissingWorker);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(Error::MissingWorker);
+        }
     }
     Ok(path)
 }
@@ -180,8 +203,10 @@ impl Drop for Prepared {
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> {
+    #[cfg(target_os = "linux")]
     use rustix::fs::{open, Mode, OFlags};
     // O_NONBLOCK lets us reject pipes/devices after open without hanging on a FIFO.
+    #[cfg(target_os = "linux")]
     let mut file = File::from(
         open(
             path,
@@ -190,9 +215,45 @@ fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> 
         )
         .map_err(|_| Error::ReadInput)?,
     );
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::path::{Component, Prefix};
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        // Exclude device and named-pipe namespaces before opening: they are not
+        // documents and opening a pipe can block before metadata is available.
+        let Some(Component::Prefix(prefix)) = path.components().next() else {
+            return Err(Error::ReadInput);
+        };
+        let disk_path = match prefix.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => path.is_absolute(),
+            Prefix::UNC(_, share) | Prefix::VerbatimUNC(_, share) => {
+                !share.to_string_lossy().eq_ignore_ascii_case("pipe$")
+                    && !share.to_string_lossy().eq_ignore_ascii_case("pipe")
+            }
+            _ => false,
+        };
+        if !disk_path {
+            return Err(Error::ReadInput);
+        }
+        // Open the entry itself so a file reparse point cannot redirect the read.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|_| Error::ReadInput)?
+    };
     let metadata = file.metadata().map_err(|_| Error::ReadInput)?;
-    if !metadata.is_file() {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(Error::ReadInput);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(Error::ReadInput);
+        }
     }
     if metadata.len() > limit as u64 {
         return Err(Error::InputTooLarge);
@@ -226,7 +287,8 @@ fn save_new(path: &Path, signature: &[u8], cancelled: &AtomicBool) -> Result<(),
     if cancelled.load(Ordering::Acquire) {
         return Err(Error::Cancelled);
     }
-    // Mode 0600, atomic publication, and no replacement of files or symlinks.
+    // No replacement of files or symlinks. Unix uses mode 0600; Windows
+    // inherits the destination directory ACL, so use a trusted directory.
     temporary.persist_noclobber(path).map_err(|error| {
         if error.error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::DestinationExists
