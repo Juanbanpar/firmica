@@ -151,17 +151,24 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             distribution.mkdir(exist_ok=True)
             # Both the CA trust and external-handler approval apply only to
             # this private browser copy/profile, never the Windows trust store.
-            (distribution / "policies.json").write_text(json.dumps({"policies": {
+            policy = distribution / "policies.json"
+            policy.write_text(json.dumps({"policies": {
                 "Certificates": {"ImportEnterpriseRoots": False, "Install": [str(directory / "ca.pem")]},
                 "Handlers": {"schemes": {"afirma": {"action": "useSystemDefault", "ask": False}}},
             }}))
+            # Playwright's Firefox uses its explicit policy path instead of
+            # discovering the normal distribution/policies.json file.
+            browser_environment = {**environment, "PLAYWRIGHT_FIREFOX_POLICIES_JSON": str(policy)}
             browser = playwright.firefox.launch_persistent_context(str(directory / "firefox-profile"),
-                executable_path=str(firefox_copy / "firefox.exe"), headless=False, env=environment,
+                executable_path=str(firefox_copy / "firefox.exe"), headless=False, env=browser_environment,
                 firefox_user_prefs={"network.protocol-handler.external.afirma": True,
                                     "network.protocol-handler.warn-external.afirma": False,
                                     "network.protocol-handler.prompt-without-user-activation": False})
             cleanup.callback(browser.close)
             browser_page = browser.new_page()
+            browser_page.goto("about:policies")
+            evidence["firefox_policies"] = browser_page.locator("body").inner_text()
+            assert "Certificates" in evidence["firefox_policies"], evidence["firefox_policies"]
             frames = []
 
             def socket_started(socket):
