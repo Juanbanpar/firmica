@@ -64,11 +64,11 @@ def main():
             # The machine policy is scoped to this uniquely named synthetic copy.
             import winreg
             policy = r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
-            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-                key = winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, policy, 0, winreg.KEY_SET_VALUE | view)
-                cleanup.callback(key.Close)
-                winreg.SetValueEx(key, app.name, 0, winreg.REG_SZ, f"--remote-debugging-port={port}")
-                cleanup.callback(winreg.DeleteValue, key, app.name)
+            key = winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, policy, 0,
+                                     winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY)
+            cleanup.callback(key.Close)
+            winreg.SetValueEx(key, app.name, 0, winreg.REG_SZ, f"--remote-debugging-port={port}")
+            cleanup.callback(winreg.DeleteValue, key, app.name)
         openssl_root = os.environ.get("OPENSSL_DIR")
         if openssl_root:
             environment["PATH"] = os.pathsep.join(entry for entry in environment["PATH"].split(os.pathsep)
