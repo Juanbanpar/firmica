@@ -52,11 +52,12 @@ def main():
     else:
         raise RuntimeError("Firmica already appears in RegisteredApplications")
     # Machine registrations remain intact. They also prevent claiming the scheme.
-    try:
-        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "afirma"):
-            raise RuntimeError("afirma already has a machine handler; use a clean test host")
-    except FileNotFoundError:
-        pass
+    for name in ("afirma", "Firmica.afirma"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, name):
+                raise RuntimeError(f"{name} already has a machine handler; use a clean test host")
+        except FileNotFoundError:
+            pass
 
     with tempfile.TemporaryDirectory(prefix="firmica-handler-") as temporary:
         directory = Path(temporary) / "App space & 'apostrophe'"
@@ -136,6 +137,20 @@ def main():
             invoke("Uninstall", success=False)
             assert read(keys[1]) == "foreign provider"
             remove(keys[1])
+            # CI's disposable account is elevated. A user ProgID must not
+            # shadow a machine provider referenced by an existing default.
+            if ctypes.windll.shell32.IsUserAnAdmin():
+                machine = keys[1]
+                with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, machine) as key:
+                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "foreign machine provider")
+                try:
+                    invoke("Install", *flags, success=False)
+                    assert not any(exists(path) for path in keys)
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, machine) as key:
+                        assert winreg.QueryValueEx(key, "")[0] == "foreign machine provider"
+                finally:
+                    winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, machine)
+                print("Passed: machine provider is not shadowed by a per-user registration.")
             percent = directory.parent / "literal %1 path"
             percent.mkdir()
             shutil.copy2(application, percent / "firmica.exe")

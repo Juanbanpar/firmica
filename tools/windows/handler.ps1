@@ -77,6 +77,15 @@ if ($Action -eq 'Status') {
 }
 
 if ($Action -eq 'Install') {
+    # A per-user ProgID shadows the machine ProgID, including existing defaults.
+    $provider = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey('Firmica.afirma')
+    if ($null -ne $provider) {
+        try {
+            if ($provider.GetValue($ownerName) -cne $application) {
+                throw 'The Firmica protocol provider belongs to another installation; it was not changed.'
+            }
+        } finally { $provider.Dispose() }
+    }
     if (!$TlsCertificate -or !$TlsKey -or !$Origin) {
         throw 'Install requires -TlsCertificate, -TlsKey and -Origin.'
     }
