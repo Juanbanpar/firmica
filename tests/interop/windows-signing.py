@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import subprocess
 import tempfile
+import urllib.request
 
 from windows import free_port, wait_for, windows_for
 
@@ -58,12 +59,19 @@ def main():
             wait_for(lambda: windows_for(process.pid), process)
             automation = Application(backend="win32").connect(process=process.pid)
             with sync_playwright() as playwright:
-                def connect():
+                def endpoint_ready():
                     try:
-                        return playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}", timeout=1000)
-                    except Exception:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+                            return json.load(response)
+                    except OSError as error:
+                        result["endpoint_error"] = str(error)
                         return None
-                browser = wait_for(connect, process)
+                endpoint = wait_for(endpoint_ready, process)
+                result.pop("endpoint_error", None)
+                result["webview2"] = endpoint
+                # CDP attachment initializes targets as well as the socket. Give
+                # it its own deadline instead of repeatedly aborting at one second.
+                browser = playwright.chromium.connect_over_cdp(endpoint["webSocketDebuggerUrl"], timeout=30000)
                 page = wait_for(lambda: next((page for context in browser.contexts for page in context.pages
                                              if page.url.startswith(("http://dioxus", "https://dioxus", "dioxus://"))), None), process)
                 page.locator('a[href="/sign"]').click()
@@ -137,9 +145,15 @@ def main():
                     result["checks"].append(f"{algorithm} {'attached' if attached else 'detached'} CAdES verifies with OpenSSL after native save and worker exit")
                 page.screenshot(path=str(args.output / "signed.png"), full_page=True)
                 result["passed"] = True
+        except Exception as error:
+            result["error"] = repr(error)
+            raise
         finally:
             if process is not None and process.poll() is None:
-                process.kill()
+                # WebView2 owns child processes that keep the disposable profile
+                # open; terminate this synthetic process tree before removing it.
+                subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(process.pid)],
+                               capture_output=True, timeout=15, check=True)
                 process.wait(timeout=10)
             (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
