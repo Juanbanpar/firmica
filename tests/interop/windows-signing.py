@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Exercise native Windows file dialogs, consent and controlled-worker signing."""
 import argparse
+import contextlib
+import ctypes
 import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 
 from windows import free_port, wait_for, windows_for
 
@@ -32,8 +36,11 @@ def main():
     password = "synthetic-desktop-password"
     content = b"Windows frozen signing\x00\xff\r\n"
     process = None
-    with tempfile.TemporaryDirectory(prefix="firmica-signing-") as temporary, (args.output / "application.log").open("w") as log:
+    with tempfile.TemporaryDirectory(prefix="firmica-signing-") as temporary, (args.output / "application.log").open("w") as log, contextlib.ExitStack() as cleanup:
         directory = Path(temporary)
+        copied = directory / "application"
+        shutil.copytree(app.parent, copied)
+        app = (copied / app.name).rename(copied / f"firmica-qa-{uuid.uuid4().hex}.exe")
         document = directory / "document.bin"
         document.write_bytes(content)
         for algorithm in ("rsa", "ec"):
@@ -52,6 +59,16 @@ def main():
         port = free_port()
         environment = {**os.environ, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS": f"--remote-debugging-port={port}",
                        "WEBVIEW2_USER_DATA_FOLDER": str(directory / "webview")}
+        if ctypes.windll.shell32.IsUserAnAdmin():
+            # WebView2 ignores environment debugging flags in elevated hosts.
+            # The machine policy is scoped to this uniquely named synthetic copy.
+            import winreg
+            policy = r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                key = winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, policy, 0, winreg.KEY_SET_VALUE | view)
+                cleanup.callback(key.Close)
+                winreg.SetValueEx(key, app.name, 0, winreg.REG_SZ, f"--remote-debugging-port={port}")
+                cleanup.callback(winreg.DeleteValue, key, app.name)
         openssl_root = os.environ.get("OPENSSL_DIR")
         if openssl_root:
             environment["PATH"] = os.pathsep.join(entry for entry in environment["PATH"].split(os.pathsep)
@@ -174,7 +191,6 @@ def main():
                 deadline = time.monotonic() + 10
                 while True:
                     try:
-                        import shutil
                         shutil.rmtree(directory / "webview")
                         break
                     except FileNotFoundError:
