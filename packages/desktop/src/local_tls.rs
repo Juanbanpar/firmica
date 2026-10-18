@@ -1,4 +1,4 @@
-//! Linux browser TLS provisioning. Only the server key is persisted; the issuing
+//! Per-user browser TLS provisioning. Only the server key is persisted; the issuing
 //! CA key is discarded. Trust-store changes remain an explicit external action.
 use clap::Subcommand;
 use der::{
@@ -26,10 +26,8 @@ use openssl::{
 };
 use secrecy::{ExposeSecret, SecretBox};
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    fs, io,
     net::{IpAddr, Ipv4Addr},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -38,6 +36,16 @@ use x509_cert::ext::pkix::{
     constraints::name::{GeneralSubtree, NameConstraints},
     name::GeneralName,
 };
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(windows)]
+mod windows;
+#[cfg(target_os = "linux")]
+use linux as storage;
+use storage::{check_directory, read_private, write_private};
+#[cfg(windows)]
+use windows as storage;
 
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
@@ -56,9 +64,9 @@ pub enum Command {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("use an absolute XDG_CONFIG_HOME or HOME for local TLS configuration")]
+    #[error("cannot locate an absolute per-user configuration directory")]
     Directory,
-    #[error("TLS profile paths must be user-owned directories/files with private permissions and no symlinks")]
+    #[error("TLS profile paths must have private user access and no symlinks or reparse points")]
     Permissions,
     #[error("cannot access the local TLS profile")]
     Io(#[from] io::Error),
@@ -87,10 +95,7 @@ pub struct Profile {
 }
 
 pub fn execute(command: Command) -> Result<(), Error> {
-    let base = config_home(
-        std::env::var_os("XDG_CONFIG_HOME"),
-        std::env::var_os("HOME"),
-    )?;
+    let base = storage::config_base()?;
     let profile = match command {
         Command::Init { origin } => initialize(&base, &origin)?,
         Command::Status => load(&base)?.ok_or(Error::Missing)?,
@@ -113,96 +118,17 @@ pub fn execute(command: Command) -> Result<(), Error> {
 }
 
 pub fn load_default() -> Result<Option<Profile>, Error> {
-    load(&config_home(
-        std::env::var_os("XDG_CONFIG_HOME"),
-        std::env::var_os("HOME"),
-    )?)
-}
-
-fn config_home(
-    xdg: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-) -> Result<PathBuf, Error> {
-    let directory = match xdg.filter(|value| !value.is_empty()) {
-        Some(value) => PathBuf::from(value),
-        None => PathBuf::from(home.ok_or(Error::Directory)?).join(".config"),
-    };
-    if !directory.is_absolute() {
-        return Err(Error::Directory);
-    }
-    Ok(directory)
-}
-
-fn check_directory(path: &Path, private: bool) -> Result<(), Error> {
-    let metadata = fs::symlink_metadata(path)?;
-    let forbidden = if private { 0o077 } else { 0o022 };
-    if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & forbidden != 0
-    {
-        return Err(Error::Permissions);
-    }
-    Ok(())
-}
-
-fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(Error::Permissions);
-    }
-    if metadata.len() > MAX_FILE_BYTES {
-        return Err(Error::Invalid);
-    }
-    let mut bytes = SecretBox::new(Box::new(Vec::new()));
-    use secrecy::ExposeSecretMut;
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(bytes.expose_secret_mut())?;
-    if bytes.expose_secret().len() as u64 > MAX_FILE_BYTES {
-        return Err(Error::Invalid);
-    }
-    Ok(bytes)
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
+    load(&storage::config_base()?)
 }
 
 fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {
     firmica_transport::validate_origin(origin).map_err(|_| Error::Origin)?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(base)?;
-    check_directory(base, false)?;
-    let parent = base.join("firmica");
-    match fs::DirBuilder::new().mode(0o700).create(&parent) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
-    check_directory(&parent, true)?;
+    let parent = storage::prepare(base)?;
     let destination = parent.join("browser-tls");
     if fs::symlink_metadata(&destination).is_ok() {
         return Err(Error::Exists);
     }
-    let staging = tempfile::Builder::new()
-        .prefix(".browser-tls-")
-        .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(&parent)?;
+    let staging = storage::staging(&parent)?;
     let (authority_key, authority) = authority()?;
     let (server_key, server) = listener(&authority_key, &authority)?;
     // No CA key bytes are serialized, even into the temporary profile.
@@ -220,19 +146,7 @@ fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {
     )?;
     // Publish only a complete, validated identity; concurrent initialization never overwrites it.
     read_profile(staging.path())?;
-    File::open(staging.path())?.sync_all()?;
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        staging.path(),
-        rustix::fs::CWD,
-        &destination,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(|error| match error {
-        rustix::io::Errno::EXIST | rustix::io::Errno::NOTEMPTY => Error::Exists,
-        error => Error::Io(error.into()),
-    })?;
-    File::open(&parent)?.sync_all()?;
+    storage::publish(staging.path(), &destination)?;
     read_profile(&destination)
 }
 
