@@ -4,6 +4,12 @@
 //! limit and non-dumpable status before reading credentials. Parent pipe I/O uses
 //! nonblocking descriptors with a ten-second deadline per operation. These are
 //! resource controls, not a filesystem/network sandbox or a trust decision.
+//! Windows starts workers suspended, assigns a kill-on-close job with 256 MiB
+//! committed-memory, five-second user CPU and one-process limits, then resumes.
+//! Owned pipe I/O threads have the same operation deadlines; failure terminates
+//! and reaps the worker before releasing IPC buffers. Cleanup has a separate
+//! ten-second deadline. Windows requests WER no-heap/no-UI reporting; privileged
+//! dumps and machine LocalDumps policies are outside this guarantee.
 //! Other platforms fail closed; no in-process fallback is used.
 //!
 //! The worker keeps the unlocked private key until explicit close or abandonment.
@@ -15,7 +21,7 @@
 //! Operations block. Call outside the UI loop. Obtain consent and apply certificate
 //! policy separately, then **close successfully before publishing any signature**.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 use firmica_certificates::{CertificateError, MAX_PKCS12_BYTES};
@@ -28,7 +34,11 @@ use std::{path::Path, time::Duration};
 
 #[cfg(target_os = "linux")]
 mod process;
-#[cfg(target_os = "linux")]
+#[cfg(windows)]
+#[allow(unsafe_code)]
+#[path = "windows.rs"]
+mod process;
+#[cfg(any(target_os = "linux", windows))]
 mod wire;
 
 /// Maximum UTF-8 password length accepted before launching a worker.
@@ -42,7 +52,9 @@ pub const MAX_CERTIFICATES: usize = 32;
 pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 /// Hard Linux address-space limit for each worker (256 MiB).
 pub const MAX_ADDRESS_SPACE_BYTES: u64 = 256 * 1024 * 1024;
-/// Hard cumulative CPU-time limit for the whole worker, not per operation.
+/// Windows per-worker committed-memory limit (256 MiB), not virtual address space.
+pub const MAX_COMMITTED_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
+/// Hard cumulative CPU-time limit, not per operation (Windows: user-mode time only).
 pub const MAX_CPU_SECONDS: u64 = 5;
 /// Parent deadline for the startup handshake/import, each signing operation and close.
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -80,7 +92,7 @@ pub enum WorkerError {
 pub struct WorkerKey {
     identity: CertificateIdentity,
     capabilities: Vec<SigningCapability>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     process: Option<process::Process>,
     failure: Option<WorkerError>,
 }
@@ -117,7 +129,7 @@ impl WorkerKey {
         container: SecretBox<Vec<u8>>,
         password: SecretString,
     ) -> Result<Self, WorkerError> {
-        if !cfg!(target_os = "linux") {
+        if !cfg!(any(target_os = "linux", windows)) {
             return Err(WorkerError::UnsupportedPlatform);
         }
         if !executable.is_absolute()
@@ -128,7 +140,7 @@ impl WorkerKey {
         {
             return Err(WorkerError::InvalidInput);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             let mut process = process::Process::spawn(executable)?;
             let result = (|| {
@@ -155,7 +167,7 @@ impl WorkerKey {
                 Err(error) => Err(process.abort(error)),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         unreachable!()
     }
 
@@ -169,7 +181,7 @@ impl WorkerKey {
         if let Some(error) = self.failure {
             return Err(error);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             let mut this = self;
             let mut process = this.process.take().ok_or(WorkerError::Unavailable)?;
@@ -186,7 +198,7 @@ impl WorkerKey {
                 Err(error) => Err(process.abort(error)),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         Err(WorkerError::UnsupportedPlatform)
     }
 }
@@ -211,7 +223,7 @@ impl SigningKey for WorkerKey {
         {
             return Err(SigningError::UnsupportedOperation);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             let process = self.process.as_mut().ok_or(SigningError::BackendFailure)?;
             let result = (|| {
@@ -227,26 +239,27 @@ impl SigningKey for WorkerKey {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         Err(SigningError::UnsupportedOperation)
     }
 }
 
 /// Run the worker's stdio protocol; only call from a dedicated child-process entry point.
 ///
-/// Linux resource controls and non-dumpable status are applied **to this process**
-/// before reading credentials. Do not call from the application process or UI.
+/// Linux installs resource controls and non-dumpable status. Windows verifies
+/// its parent-installed job limits and requests WER no-heap/no-UI reporting.
+/// Both complete before reading credentials. Do not call from the application process or UI.
 ///
 /// # Errors
 /// Fails closed on other platforms or if controls cannot be installed, and rejects
 /// malformed/oversized commands. EOF destroys any imported key. No diagnostics are
 /// written to stdout/stderr. The binary exits nonzero on protocol/system failures.
 pub fn serve() -> Result<(), WorkerError> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         wire::serve()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         Err(WorkerError::UnsupportedPlatform)
     }

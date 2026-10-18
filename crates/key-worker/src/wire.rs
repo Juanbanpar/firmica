@@ -1,6 +1,6 @@
 use crate::{
-    WorkerError, MAX_ADDRESS_SPACE_BYTES, MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CPU_SECONDS,
-    MAX_PASSWORD_BYTES, MAX_SIGNING_INPUT_BYTES,
+    WorkerError, MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_PASSWORD_BYTES,
+    MAX_SIGNING_INPUT_BYTES,
 };
 use firmica_certificates::{CertificateError, Pkcs12Key, MAX_PKCS12_BYTES};
 use firmica_signing::{
@@ -294,22 +294,30 @@ fn import_key(input: &mut impl Read) -> Result<Pkcs12Key, WorkerError> {
 }
 
 pub(crate) fn serve() -> Result<(), WorkerError> {
-    use rustix::process::{set_dumpable_behavior, setrlimit, DumpableBehavior, Resource, Rlimit};
-    set_dumpable_behavior(DumpableBehavior::NotDumpable).map_err(|_| WorkerError::Unavailable)?;
-    for (resource, value) in [
-        (Resource::Core, 0),
-        (Resource::As, MAX_ADDRESS_SPACE_BYTES),
-        (Resource::Cpu, MAX_CPU_SECONDS),
-    ] {
-        setrlimit(
-            resource,
-            Rlimit {
-                current: Some(value),
-                maximum: Some(value),
-            },
-        )
-        .map_err(|_| WorkerError::Unavailable)?;
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::process::{
+            set_dumpable_behavior, setrlimit, DumpableBehavior, Resource, Rlimit,
+        };
+        set_dumpable_behavior(DumpableBehavior::NotDumpable)
+            .map_err(|_| WorkerError::Unavailable)?;
+        for (resource, value) in [
+            (Resource::Core, 0),
+            (Resource::As, crate::MAX_ADDRESS_SPACE_BYTES),
+            (Resource::Cpu, crate::MAX_CPU_SECONDS),
+        ] {
+            setrlimit(
+                resource,
+                Rlimit {
+                    current: Some(value),
+                    maximum: Some(value),
+                },
+            )
+            .map_err(|_| WorkerError::Unavailable)?;
+        }
     }
+    #[cfg(windows)]
+    crate::process::verify_controls()?;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     write_frame(&mut output, HELLO)?;

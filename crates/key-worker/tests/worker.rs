@@ -2,7 +2,7 @@ use firmica_key_worker::{WorkerError, WorkerKey};
 use secrecy::{SecretBox, SecretString};
 use std::path::Path;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 #[test]
 fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert_eq!(
@@ -17,17 +17,14 @@ fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert!(firmica_key_worker::serve().is_err());
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", windows))]
+mod native {
     use super::*;
     use der::{Any, Decode, Encode, Sequence};
     use firmica_cades::ContentMode;
     use firmica_certificates::{CertificateError, MAX_PKCS12_BYTES};
     use firmica_core::signing::CadesReview;
-    use firmica_key_worker::{
-        MAX_ADDRESS_SPACE_BYTES, MAX_CPU_SECONDS, MAX_PASSWORD_BYTES, MAX_SIGNING_INPUT_BYTES,
-        OPERATION_TIMEOUT,
-    };
+    use firmica_key_worker::{MAX_PASSWORD_BYTES, MAX_SIGNING_INPUT_BYTES, OPERATION_TIMEOUT};
     use firmica_signing::{SignatureAlgorithm, SigningError, SigningInput, SigningKey};
     use openssl::{
         asn1::{Asn1Integer, Asn1Time},
@@ -41,13 +38,12 @@ mod linux {
         sha::sha256,
         x509::{extension::KeyUsage, X509Name, X509},
     };
-    use std::{
-        fs,
-        io::Read,
-        os::unix::fs::PermissionsExt,
-        process::{Command, Stdio},
-        time::Instant,
-    };
+    use std::{fs, process::Command, time::Instant};
+
+    #[cfg(target_os = "linux")]
+    use firmica_key_worker::{MAX_ADDRESS_SPACE_BYTES, MAX_CPU_SECONDS};
+    #[cfg(target_os = "linux")]
+    use std::{io::Read, os::unix::fs::PermissionsExt, process::Stdio};
 
     const RSA: SignatureAlgorithm = SignatureAlgorithm::RsaPkcs1v15Sha256;
     const EC: SignatureAlgorithm = SignatureAlgorithm::EcdsaP256Sha256;
@@ -255,7 +251,7 @@ mod linux {
         );
         assert_eq!(
             WorkerKey::import(
-                Path::new("/nonexistent-firmica-worker"),
+                &executable().with_file_name("nonexistent-firmica-worker.exe"),
                 secret(vec![1]),
                 SecretString::from("")
             )
@@ -283,9 +279,11 @@ mod linux {
         );
     }
 
+    #[cfg(target_os = "linux")]
     fn quote(path: &Path) -> String {
         format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"))
     }
+    #[cfg(target_os = "linux")]
     fn launcher(directory: &Path, body: &str) -> std::path::PathBuf {
         let path = directory.join("worker");
         fs::write(
@@ -299,12 +297,14 @@ mod linux {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+    #[cfg(target_os = "linux")]
     fn pid(directory: &Path) -> u32 {
         fs::read_to_string(directory.join("pid"))
             .unwrap()
             .parse()
             .unwrap()
     }
+    #[cfg(target_os = "linux")]
     fn gone(pid: u32) {
         assert!(
             !Path::new(&format!("/proc/{pid}")).exists(),
@@ -312,6 +312,7 @@ mod linux {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn deadlines_cover_stalled_startup_and_blocked_pipe_writes() {
         for hello in [false, true] {
@@ -337,6 +338,7 @@ mod linux {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn malformed_replies_fail_before_allocating_unbounded_output() {
         let directory = tempfile::tempdir().unwrap();
@@ -351,6 +353,7 @@ mod linux {
         gone(pid(directory.path()));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn dropping_or_losing_a_worker_reaps_it_and_prevents_publication() {
         for killed in [false, true] {
@@ -389,6 +392,7 @@ mod linux {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn native_limits_are_installed_before_the_worker_accepts_credentials() {
         use rustix::process::{prlimit, Pid, Resource, Rlimit};
@@ -455,11 +459,15 @@ mod linux {
         // The MAC value is unchanged: native verification must derive its key before
         // detecting the mismatch. Encoding this integer does not perform expensive work.
         pfx.mac.iterations = 1_000_000_000;
+        #[cfg(target_os = "linux")]
         let directory = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "linux")]
         let launcher = launcher(
             directory.path(),
             &format!("exec {} --stdio", quote(executable())),
         );
+        #[cfg(windows)]
+        let launcher = executable().to_path_buf();
         let start = Instant::now();
         assert!(matches!(
             WorkerKey::import(
@@ -471,6 +479,7 @@ mod linux {
             Some(WorkerError::Unavailable | WorkerError::TimedOut)
         ));
         assert!(start.elapsed() < OPERATION_TIMEOUT + std::time::Duration::from_secs(3));
+        #[cfg(target_os = "linux")]
         gone(pid(directory.path()));
     }
 }

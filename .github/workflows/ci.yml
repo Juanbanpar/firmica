@@ -37,6 +37,9 @@ jobs:
           "OPENSSL_DIR=$root" >> $env:GITHUB_ENV
           "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
           "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
+      - name: Build Windows worker control fixture
+        if: runner.os == 'Windows'
+        run: cargo +stable build --locked -p firmica-key-worker --example worker-fixture
       - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11
       - name: Compare CAdES with AutoFirma and verify with SpongyCastle
         if: runner.os == 'Linux'
