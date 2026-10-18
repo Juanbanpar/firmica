@@ -402,6 +402,9 @@ pub(crate) fn verify_controls() -> Result<(), WorkerError> {
     })?;
     let expected = required_limits();
     if actual.BasicLimitInformation.LimitFlags & LIMITS != LIMITS
+        || actual.BasicLimitInformation.LimitFlags
+            & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
+            != 0
         || actual.BasicLimitInformation.ActiveProcessLimit != 1
         || actual.BasicLimitInformation.PerProcessUserTimeLimit
             != expected.BasicLimitInformation.PerProcessUserTimeLimit

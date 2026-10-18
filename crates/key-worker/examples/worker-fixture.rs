@@ -7,10 +7,12 @@ fn main() {}
 fn main() {
     use std::{
         io::{self, Write},
+        os::windows::process::CommandExt,
         process::Command,
         thread,
         time::Duration,
     };
+    use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
     use windows_sys::Win32::System::{JobObjects::*, Memory::*};
     fn frame(bytes: &[u8]) {
         let mut output = io::stdout().lock();
@@ -62,13 +64,20 @@ fn main() {
                 frame(b"memory-allowed");
             }
         }
-        "descendant" => match Command::new(&executable).arg("--child").spawn() {
-            Err(_) => frame(b"descendant-denied"),
-            Ok(mut child) => {
-                let _ = child.wait();
-                frame(b"descendant-allowed");
+        "descendant" => {
+            for flags in [0, CREATE_BREAKAWAY_FROM_JOB] {
+                if let Ok(mut child) = Command::new(&executable)
+                    .arg("--child")
+                    .creation_flags(flags)
+                    .spawn()
+                {
+                    let _ = child.wait();
+                    frame(b"descendant-allowed");
+                    return;
+                }
             }
-        },
+            frame(b"descendant-denied");
+        }
         "limits" => {
             let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
             // SAFETY: query our innermost job into a correctly sized output.
