@@ -58,6 +58,8 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
+On Windows, `firmica.exe 'afirma://…'` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Windows local signing remains unavailable, and installer URI-handler registration is not verified.
+
 With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
 
 ```sh
@@ -125,6 +127,8 @@ The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `db
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 
 For native Android invocation checks, build a debug APK with `dx build --locked --package mobile --platform android --target x86_64-linux-android`, then run `python3 tests/interop/android.py --serial emulator-5554 --apk /path/to/app-debug.apk`. The script refuses physical devices. Add `--browser org.mozilla.firefox` to check browser links with Firefox already installed in the emulator.
+
+On Windows, run `python tests/interop/windows.py --app target/dx/firmica/debug/windows/app/firmica.exe` after the desktop build. It requires OpenSSL and a desktop session, opens the real application, checks warm URI delivery and crash recovery, and saves evidence under `.test-artifacts/windows/`. It uses a temporary TLS identity without changing trust stores or URI associations. This checks command-line invocation; installer and browser handler selection need separate testing.
 
 On macOS with Xcode 16.4 and the iOS 18.5 Simulator runtime, run:
 

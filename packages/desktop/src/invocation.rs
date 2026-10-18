@@ -7,6 +7,8 @@ use firmica_transport::{Decision, PendingRequest, Server};
 use std::{path::PathBuf, sync::OnceLock};
 
 static INBOX: OnceLock<Inbox> = OnceLock::new();
+#[cfg(windows)]
+mod windows;
 pub fn inbox() -> Inbox {
     INBOX.get_or_init(Inbox::default).clone()
 }
@@ -57,6 +59,17 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
         None => return Ok(()),
     };
     let runtime = tokio::runtime::Runtime::new().map_err(|_| "cannot start async runtime")?;
+    #[cfg(windows)]
+    let _instance = match runtime
+        .block_on(windows::primary_or_forward(
+            args.uri.as_deref(),
+            sender.clone(),
+        ))
+        .map_err(|_| "cannot establish private Windows invocation channel")?
+    {
+        Some(instance) => instance,
+        None => return Ok(()),
+    };
     let origin = args.origin;
     if let Some(origin) = &origin {
         firmica_transport::validate_origin(origin).map_err(|e| e.to_string())?;

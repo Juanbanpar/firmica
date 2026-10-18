@@ -34,6 +34,12 @@ openssl.workspace = true
 thiserror.workspace = true
 x509-cert = "0.2.5"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { workspace = true, features = ["process"] }
+
 [features]
 default = ["desktop"]
 desktop = ["dioxus/desktop"]

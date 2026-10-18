@@ -99,6 +99,16 @@ jobs:
       # Generates mobile assets and checks its host entry point; not a native mobile build.
       - run: dx build --locked --package mobile --platform desktop --features mobile
       - run: cargo +stable test --locked -p desktop -p mobile
+      - name: Verify Windows cold and warm native invocation
+        if: runner.os == 'Windows'
+        run: python tests/interop/windows.py --app target/dx/firmica/debug/windows/app/firmica.exe
+      - name: Save Windows invocation evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-invocation
+          path: .test-artifacts/windows/
+          if-no-files-found: warn
       - name: Verify desktop signing and cleanup with the native worker
         if: runner.os == 'Linux'
         shell: bash
