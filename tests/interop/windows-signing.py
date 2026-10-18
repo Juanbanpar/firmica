@@ -2,11 +2,8 @@
 """Exercise native Windows file dialogs, consent and controlled-worker signing."""
 import argparse
 import contextlib
-import ctypes
 import hashlib
-import http.client
 import json
-import os
 from pathlib import Path
 import platform
 import shutil
@@ -16,6 +13,7 @@ import time
 import uuid
 
 from windows import free_port, wait_for, windows_for
+import windows_gui
 
 
 def main():
@@ -57,49 +55,13 @@ def main():
                 "-passout", f"pass:{password}",
             ], check=True, capture_output=True, timeout=30)
         port = free_port()
-        environment = {**os.environ, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS": f"--remote-debugging-port={port}",
-                       "WEBVIEW2_USER_DATA_FOLDER": str(directory / "webview")}
-        if ctypes.windll.shell32.IsUserAnAdmin():
-            # WebView2 ignores environment debugging flags in elevated hosts.
-            # The machine policy is scoped to this uniquely named synthetic copy.
-            import winreg
-            policy = r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
-            key = winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, policy, 0,
-                                     winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY)
-            cleanup.callback(key.Close)
-            winreg.SetValueEx(key, app.name, 0, winreg.REG_SZ, f"--remote-debugging-port={port}")
-            cleanup.callback(winreg.DeleteValue, key, app.name)
-        openssl_root = os.environ.get("OPENSSL_DIR")
-        if openssl_root:
-            environment["PATH"] = os.pathsep.join(entry for entry in environment["PATH"].split(os.pathsep)
-                                                 if not Path(entry).is_relative_to(Path(openssl_root)))
+        environment = cleanup.enter_context(windows_gui.debugging(app, port, directory))
         try:
             process = subprocess.Popen([str(app)], env=environment, stdout=log, stderr=log)
             wait_for(lambda: windows_for(process.pid), process)
             automation = Application(backend="win32").connect(process=process.pid)
             with sync_playwright() as playwright:
-                def endpoint_ready():
-                    try:
-                        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
-                        try:
-                            connection.request("GET", "/json/version")
-                            response = connection.getresponse()
-                            if response.status != 200:
-                                raise OSError(f"WebView2 endpoint returned {response.status}")
-                            return json.loads(response.read())
-                        finally:
-                            connection.close()
-                    except OSError as error:
-                        result["endpoint_error"] = str(error)
-                        return None
-                endpoint = wait_for(endpoint_ready, process)
-                result.pop("endpoint_error", None)
-                result["webview2"] = endpoint
-                # CDP attachment initializes targets as well as the socket. Give
-                # it its own deadline instead of repeatedly aborting at one second.
-                browser = playwright.chromium.connect_over_cdp(endpoint["webSocketDebuggerUrl"], timeout=30000)
-                page = wait_for(lambda: next((page for context in browser.contexts for page in context.pages
-                                             if page.url.startswith(("http://dioxus", "https://dioxus", "dioxus://"))), None), process)
+                browser, page = windows_gui.connect(playwright, port, process, result)
                 page.locator('a[href="/sign"]').click()
                 page.locator("#sign-language").click()
 
@@ -107,26 +69,10 @@ def main():
                     return page.locator("#sign-status").inner_text()
 
                 def workers():
-                    query = f"Get-CimInstance Win32_Process -Filter \"ParentProcessId = {process.pid} AND Name = 'firmica-key-worker.exe'\" | Select-Object -ExpandProperty ProcessId"
-                    output = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15)
-                    return output.split()
+                    return windows_gui.processes(name="firmica-key-worker.exe", parent=process.pid)
 
                 def dialog(selector, filename):
-                    page.locator(selector).click()
-                    native = automation.window(class_name="#32770")
-                    native.wait("ready", timeout=15)
-                    native.set_focus()
-                    if filename is None:
-                        native.child_window(control_id=2, class_name="Button").click_input()
-                    else:
-                        filename_control = native.child_window(class_name="Edit")
-                        filename_control.wait("ready", timeout=15)
-                        filename_control.set_edit_text(str(filename))
-                        assert filename_control.window_text() == str(filename)
-                        confirm = native.child_window(control_id=1, class_name="Button")
-                        confirm.wait("ready", timeout=15)
-                        confirm.click_input()
-                    native.wait_not("visible", timeout=15)
+                    windows_gui.dialog(automation, page, selector, filename)
 
                 def prepare(algorithm="rsa", secret=password, attached=False):
                     dialog("#sign-document", document)
