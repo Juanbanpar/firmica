@@ -3,7 +3,6 @@
 import argparse
 import ctypes
 from ctypes import wintypes
-import os
 from pathlib import Path
 import platform
 import shutil
@@ -96,8 +95,13 @@ def main():
             parsed = shell.CommandLineToArgvW(launch.replace("%1", uri), ctypes.byref(count))
             assert parsed
             try:
-                assert list(parsed[:count.value]) == [str(application), "--tls-cert", str(certificate),
-                                                    "--tls-key", str(private_key), "--origin", "https://example.invalid", "--", uri]
+                arguments = list(parsed[:count.value])
+                assert len(arguments) == 9, arguments
+                assert [arguments[1], arguments[3], *arguments[5:]] == [
+                    "--tls-cert", "--tls-key", "--origin", "https://example.invalid", "--", uri
+                ], arguments
+                for actual, expected in ((arguments[0], application), (arguments[2], certificate), (arguments[4], private_key)):
+                    assert Path(actual).samefile(expected), (actual, str(expected))
             finally:
                 kernel.LocalFree(parsed)
             invoke("Install", *flags)
