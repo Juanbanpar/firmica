@@ -88,8 +88,29 @@ if ($Action -eq 'Install') {
     }
     if (!$TlsCertificate -and !$TlsKey -and !$Origin) {
         # The CLI validates the private profile without opening a GUI or changing trust.
-        & $application tls status
-        if ($LASTEXITCODE -ne 0) { throw 'Configure a valid private profile with firmica.exe tls init --origin <origin> first.' }
+        # Packaged GUI executables do not reliably set PowerShell's LASTEXITCODE.
+        $validation = New-Object System.Diagnostics.Process
+        $validation.StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $validation.StartInfo.FileName = $application
+        $validation.StartInfo.Arguments = 'tls status'
+        $validation.StartInfo.UseShellExecute = $false
+        $validation.StartInfo.RedirectStandardOutput = $true
+        $validation.StartInfo.RedirectStandardError = $true
+        try {
+            if (!$validation.Start()) { throw 'Cannot start TLS profile validation.' }
+            $validationOutput = $validation.StandardOutput.ReadToEndAsync()
+            $validationError = $validation.StandardError.ReadToEndAsync()
+            if (!$validation.WaitForExit(30000)) {
+                $validation.Kill()
+                $validation.WaitForExit()
+                throw 'TLS profile validation timed out.'
+            }
+            Write-Output $validationOutput.GetAwaiter().GetResult()
+            $validationFailure = $validationError.GetAwaiter().GetResult()
+            if ($validation.ExitCode -ne 0) {
+                throw "Configure a valid private profile with firmica.exe tls init --origin <origin> first. $validationFailure"
+            }
+        } finally { $validation.Dispose() }
         $command = (Quote-Argument $application) + ' -- "%1"'
     } else {
         if (!$TlsCertificate -or !$TlsKey -or !$Origin) {

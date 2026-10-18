@@ -2,6 +2,7 @@
 """Test registration ownership and argv on a disposable Windows user account."""
 import argparse
 import ctypes
+import os
 from ctypes import wintypes
 from pathlib import Path
 import platform
@@ -65,7 +66,15 @@ def main():
         script = directory / "handler.ps1"
         shutil.copy2(args.script, script)
         application = directory / "firmica.exe"
-        application.write_bytes(b"registration fixture; not executed")
+        # A real GUI-subsystem executable reproduces PowerShell's exit-code
+        # behavior without opening a window, accessing keys or needing Rust.
+        fixture = directory / "fixture.cs"
+        fixture.write_text('using System;\nusing System.IO;\nusing System.Reflection;\npublic static class Fixture {\n    [STAThread] public static int Main(string[] args) {\n        if (args.Length != 2 || args[0] != "tls" || args[1] != "status") return 19;\n        if (!File.Exists(Assembly.GetExecutingAssembly().Location + ".ready")) {\n            Console.Error.WriteLine("Synthetic profile is missing"); return 23;\n        }\n        Console.WriteLine("Synthetic profile validated"); return 0;\n    }\n}\n')
+        compiled = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference = 'Stop'; Add-Type -Path $env:FIRMICA_FIXTURE_SOURCE -OutputAssembly $env:FIRMICA_FIXTURE_BINARY -OutputType WindowsApplication"],
+            env={**os.environ, "FIRMICA_FIXTURE_SOURCE": str(fixture), "FIRMICA_FIXTURE_BINARY": str(application)},
+            capture_output=True, text=True, timeout=30)
+        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
         certificate, private_key = directory / "TLS certificate.pem", directory / "TLS key.pem"
         certificate.write_text("synthetic certificate path fixture")
         private_key.write_text("synthetic key path fixture")
@@ -80,6 +89,16 @@ def main():
 
         try:
             assert "not registered" in invoke("Status")
+            invoke("Install", success=False)
+            assert not any(exists(path) for path in keys)
+            ready = application.with_name(application.name + ".ready")
+            ready.write_text("synthetic profile fixture")
+            assert "Synthetic profile validated" in invoke("Install")
+            managed = read(keys[1] + r"\shell\open\command")
+            assert managed.endswith(' -- "%1"') and "--tls-cert" not in managed
+            invoke("Uninstall")
+            ready.unlink()
+            assert not any(exists(path) for path in keys)
             invoke("Install", *flags)
             launch = read(keys[1] + r"\shell\open\command")
             assert read(keys[0] + r"\shell\open\command") == launch
