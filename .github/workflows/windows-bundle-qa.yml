@@ -29,7 +29,7 @@ jobs:
           $source = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" --jq '.head_sha'
           if ($LASTEXITCODE -ne 0) { throw 'cannot resolve artifact revision' }
           # This replay may change tests, but must exercise the same application and builder.
-          git diff --exit-code $source HEAD -- Cargo.toml Cargo.lock packages crates tools/build-desktop.py
+          git diff --exit-code $source HEAD -- Cargo.toml Cargo.lock packages crates tools/build-desktop.py tools/windows
           if ($LASTEXITCODE -ne 0) { throw 'bundle source differs from this checkout; rebuild it first' }
           gh run download $env:SOURCE_RUN --name windows-invocation --dir "$env:RUNNER_TEMP/source-artifact"
           if ($LASTEXITCODE -ne 0) { throw 'artifact download failed' }
