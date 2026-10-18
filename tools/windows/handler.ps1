@@ -100,7 +100,10 @@ if ($Action -eq 'Install') {
     $scheme = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey('afirma')
     $claimScheme = $null -eq $scheme
     if ($null -ne $scheme) {
-        try { $claimScheme = $scheme.GetValue($ownerName) -ceq $application }
+        try {
+            $claimScheme = ($scheme.GetValue($ownerName) -ceq $application) -and
+                ((Read-Value "$schemePath\shell\open\command" '') -ceq (Read-Value "$providerPath\shell\open\command" ''))
+        }
         finally { $scheme.Dispose() }
     }
     Write-Values $providerPath @{ '' = 'Firmica signature request'; 'URL Protocol' = ''; $ownerName = $application }

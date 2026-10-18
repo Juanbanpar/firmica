@@ -125,6 +125,8 @@ def main():
 
             invoke("Install", *flags)
             write(keys[0] + r"\shell\open\command", "replacement command")
+            invoke("Install", *flags)
+            assert read(keys[0] + r"\shell\open\command") == "replacement command"
             invoke("Uninstall")
             assert read(keys[0] + r"\shell\open\command") == "replacement command"
             remove(keys[0])
