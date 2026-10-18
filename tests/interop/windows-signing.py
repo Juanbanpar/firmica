@@ -2,13 +2,14 @@
 """Exercise native Windows file dialogs, consent and controlled-worker signing."""
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import platform
 import subprocess
 import tempfile
-import urllib.request
+import time
 
 from windows import free_port, wait_for, windows_for
 
@@ -23,6 +24,7 @@ def main():
     # Imported only on the supported host; production never enables inspection.
     from playwright.sync_api import sync_playwright
     from pywinauto import Application
+    from PIL import ImageGrab
 
     app = args.app.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -61,8 +63,15 @@ def main():
             with sync_playwright() as playwright:
                 def endpoint_ready():
                     try:
-                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
-                            return json.load(response)
+                        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                        try:
+                            connection.request("GET", "/json/version")
+                            response = connection.getresponse()
+                            if response.status != 200:
+                                raise OSError(f"WebView2 endpoint returned {response.status}")
+                            return json.loads(response.read())
+                        finally:
+                            connection.close()
                     except OSError as error:
                         result["endpoint_error"] = str(error)
                         return None
@@ -147,6 +156,11 @@ def main():
                 result["passed"] = True
         except Exception as error:
             result["error"] = repr(error)
+            ImageGrab.grab(all_screens=True).save(args.output / "failure-desktop.png")
+            query = "Get-CimInstance Win32_Process | Where-Object Name -eq 'msedgewebview2.exe' | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json"
+            snapshot = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+                                      capture_output=True, text=True, timeout=15)
+            (args.output / "webview-processes.json").write_text(snapshot.stdout)
             raise
         finally:
             if process is not None and process.poll() is None:
@@ -155,6 +169,20 @@ def main():
                 subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(process.pid)],
                                capture_output=True, timeout=15, check=True)
                 process.wait(timeout=10)
+                # WebView2 can outlive its owner briefly while releasing profile
+                # handles. Retry removal within a deadline; do not hide failure.
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        import shutil
+                        shutil.rmtree(directory / "webview")
+                        break
+                    except FileNotFoundError:
+                        break
+                    except PermissionError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.1)
             (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 

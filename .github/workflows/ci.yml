@@ -132,7 +132,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          python -m pip install playwright==1.58.0 pywinauto==0.6.9
+          python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
           $archive = @(Get-ChildItem target/dx/firmica/bundle/windows/*.zip)
           if ($archive.Count -ne 1) { throw "expected exactly one portable bundle" }
           $archive = $archive[0]
