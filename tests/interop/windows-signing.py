@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Exercise native Windows file dialogs, consent and controlled-worker signing."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import subprocess
+import tempfile
+
+from windows import free_port, wait_for, windows_for
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--app", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=Path(".test-artifacts/windows-signing"))
+    args = parser.parse_args()
+    if platform.system() != "Windows":
+        parser.error("this test requires a native Windows desktop session")
+    # Imported only on the supported host; production never enables inspection.
+    from playwright.sync_api import sync_playwright
+    from pywinauto import Application
+
+    app = args.app.resolve(strict=True)
+    args.output.mkdir(parents=True, exist_ok=True)
+    result = {"platform": platform.platform(), "passed": False, "checks": []}
+    password = "synthetic-desktop-password"
+    content = b"Windows frozen signing\x00\xff\r\n"
+    process = None
+    with tempfile.TemporaryDirectory(prefix="firmica-signing-") as temporary, (args.output / "application.log").open("w") as log:
+        directory = Path(temporary)
+        document = directory / "document.bin"
+        document.write_bytes(content)
+        for algorithm in ("rsa", "ec"):
+            key = ["rsa:2048"] if algorithm == "rsa" else ["ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", *key, "-noenc", "-days", "1",
+                "-subj", "/CN=Firmica synthetic Windows signer",
+                "-addext", "keyUsage=critical,digitalSignature", "-addext", "basicConstraints=critical,CA:FALSE",
+                "-keyout", str(directory / f"{algorithm}.key"), "-out", str(directory / f"{algorithm}.pem"),
+            ], check=True, capture_output=True, timeout=30)
+            subprocess.run([
+                "openssl", "pkcs12", "-export", "-inkey", str(directory / f"{algorithm}.key"),
+                "-in", str(directory / f"{algorithm}.pem"), "-out", str(directory / f"{algorithm}.p12"),
+                "-passout", f"pass:{password}",
+            ], check=True, capture_output=True, timeout=30)
+        port = free_port()
+        environment = {**os.environ, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS": f"--remote-debugging-port={port}",
+                       "WEBVIEW2_USER_DATA_FOLDER": str(directory / "webview")}
+        openssl_root = os.environ.get("OPENSSL_DIR")
+        if openssl_root:
+            environment["PATH"] = os.pathsep.join(entry for entry in environment["PATH"].split(os.pathsep)
+                                                 if not Path(entry).is_relative_to(Path(openssl_root)))
+        try:
+            process = subprocess.Popen([str(app)], env=environment, stdout=log, stderr=log)
+            wait_for(lambda: windows_for(process.pid), process)
+            automation = Application(backend="win32").connect(process=process.pid)
+            with sync_playwright() as playwright:
+                def connect():
+                    try:
+                        return playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}", timeout=1000)
+                    except Exception:
+                        return None
+                browser = wait_for(connect, process)
+                page = wait_for(lambda: next((page for context in browser.contexts for page in context.pages
+                                             if page.url.startswith(("http://dioxus", "https://dioxus", "dioxus://"))), None), process)
+                page.locator('a[href="/sign"]').click()
+                page.locator("#sign-language").click()
+
+                def status():
+                    return page.locator("#sign-status").inner_text()
+
+                def workers():
+                    query = f"Get-CimInstance Win32_Process -Filter \"ParentProcessId = {process.pid} AND Name = 'firmica-key-worker.exe'\" | Select-Object -ExpandProperty ProcessId"
+                    output = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15)
+                    return output.split()
+
+                def dialog(selector, filename):
+                    page.locator(selector).click()
+                    native = automation.window(class_name="#32770")
+                    native.wait("visible", timeout=15)
+                    if filename is None:
+                        native.child_window(control_id=2, class_name="Button").click()
+                    else:
+                        native.child_window(class_name="Edit").set_edit_text(str(filename))
+                        native.child_window(control_id=1, class_name="Button").click()
+                    native.wait_not("visible", timeout=15)
+
+                def prepare(algorithm="rsa", secret=password, attached=False):
+                    dialog("#sign-document", document)
+                    dialog("#sign-certificate", directory / f"{algorithm}.p12")
+                    page.locator("#sign-password").fill(secret)
+                    page.locator("#sign-algorithm").select_option(algorithm)
+                    page.locator("#sign-attached").set_checked(attached)
+                    page.locator("#sign-prepare").click()
+
+                prepare(secret="wrong synthetic password")
+                wait_for(lambda: "Cannot open" in status(), process)
+                assert page.locator("#sign-password").input_value() == ""
+                assert not workers()
+                result["checks"].append("native rfd open dialogs and invalid password leave no worker")
+                prepare()
+                page.locator("#sign-document-hash").wait_for()
+                assert page.locator("#sign-save").is_disabled()
+                assert len(workers()) == 1
+                page.locator("#sign-cancel").click()
+                wait_for(lambda: status() == "Operation cancelled.", process)
+                assert not workers()
+                result["checks"].append("consent is required and cancellation closes the worker")
+                for algorithm, attached in (("rsa", False), ("ec", True)):
+                    document.write_bytes(content)
+                    prepare(algorithm, attached=attached)
+                    page.locator("#sign-document-hash").wait_for()
+                    assert page.locator("#sign-document-hash").inner_text() == hashlib.sha256(content).hexdigest()
+                    assert page.locator("#sign-password").count() == 0
+                    document.write_bytes(b"changed after review")
+                    page.locator("#sign-acknowledge").check()
+                    dialog("#sign-save", None)
+                    assert page.locator("#sign-document-hash").count() == 1
+                    assert len(workers()) == 1
+                    destination = directory / f"{algorithm}.csig"
+                    dialog("#sign-save", destination)
+                    wait_for(lambda: status() == "Signature saved.", process)
+                    assert not workers(), "worker must exit before publication"
+                    original = directory / "original.bin"
+                    original.write_bytes(content)
+                    command = ["openssl", "cms", "-verify", "-cades", "-binary", "-inform", "DER",
+                               "-in", str(destination), "-CAfile", str(directory / f"{algorithm}.pem"),
+                               "-no-CApath", "-no-CAstore", "-partial_chain", "-purpose", "any",
+                               "-out", str(directory / "verified.bin")]
+                    if not attached:
+                        command += ["-content", str(original)]
+                    subprocess.run(command, check=True, capture_output=True, timeout=30)
+                    assert (directory / "verified.bin").read_bytes() == content
+                    result["checks"].append(f"{algorithm} {'attached' if attached else 'detached'} CAdES verifies with OpenSSL after native save and worker exit")
+                page.screenshot(path=str(args.output / "signed.png"), full_page=True)
+                result["passed"] = True
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

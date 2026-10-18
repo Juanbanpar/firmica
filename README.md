@@ -2,7 +2,7 @@
 
 Rust electronic-signature client using Dioxus 0.7.10 and Tailwind CSS 4, targeting existing AutoFirma browser integrations.
 
-The Linux desktop application signs local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires local TLS setup, browser trust and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
+The Linux and Windows desktop applications sign local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires local TLS setup, browser trust and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
 
 ## Build
 
@@ -32,13 +32,27 @@ dx serve --platform ios
 For Linux document signing, build the application and its companion key worker together from the workspace root:
 
 ```sh
-python3 tools/build-linux-desktop.py build
+python3 tools/build-desktop.py build
 ./target/dx/firmica/debug/linux/app/firmica
 # Release application and Debian package:
-python3 tools/build-linux-desktop.py bundle
+python3 tools/build-desktop.py bundle
 ```
 
-The builder requires Python 3 and invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install runtime dependencies separately; the generated package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback. Local signing is unavailable on other platforms.
+The builder requires Python 3 and invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install Linux runtime dependencies separately; the Debian package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback.
+
+On x64 Windows, install the MSVC build tools, WebView2 Runtime, and a patched shared OpenSSL 3 distribution with x64 import libraries. In PowerShell, set its build paths and build from the workspace root:
+
+```powershell
+$env:OPENSSL_DIR = 'C:\Program Files\OpenSSL'
+$env:OPENSSL_LIB_DIR = "$env:OPENSSL_DIR\lib\VC\x64\MD"
+$env:OPENSSL_STATIC = '0'
+python tools/build-desktop.py build
+.\target\dx\firmica\debug\windows\app\firmica.exe
+# Release portable ZIP:
+python tools/build-desktop.py bundle
+```
+
+The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the distribution's license from `OPENSSL_DIR` beside the application and worker. The ZIP is written under `target/dx/firmica/bundle/windows/`; extract it to a trusted directory and keep its contents together. WebView2 and the MSVC runtime must be installed separately. Update the bundled OpenSSL DLLs when rebuilding with security fixes. This portable bundle does not register an `afirma` URI handler. Windows dialogs use `rfd`; selected documents must be regular files, and file reparse points are rejected. Local signing is unavailable on macOS and mobile.
 
 ## Local signing
 
@@ -46,7 +60,7 @@ Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and
 
 **Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog; cancelling it preserves the review. **Cancel** closes the certificate worker without signing.
 
-Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
+Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. Linux outputs use mode 0600; Windows outputs inherit the destination directory ACL, so choose a private directory. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
 
 ## Invocation
 
@@ -58,7 +72,7 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
-On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Windows local signing remains unavailable, and installer URI-handler registration is not verified.
+On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. The portable bundle does not register an OS URI handler. Browser signing on Windows requires explicit `--tls-cert`, `--tls-key` and `--origin` arguments; automatic TLS-profile setup is available on Linux.
 
 With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
 
@@ -156,9 +170,11 @@ FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-cer
 
 The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. CAdES tests verify attached and detached signatures with the OpenSSL CLI, check certificate binding, and reject modified content. The token test also exercises CAdES encoding. No existing certificate store is opened.
 
-The key-worker library keeps unlocked PKCS#12 keys in a separate Linux or Windows process. Linux applies address-space and CPU limits. Windows starts the worker suspended, assigns a job with committed-memory, user CPU and child-process limits, and kills it when the parent loses its job handle. Pipe operations have deadlines, and successful close is required before consuming signatures. Other platforms reject worker imports. Windows requests WER no-heap/no-UI reporting; privileged dumps and machine dump policies remain outside that guarantee. API contracts and limits are documented with rustdoc. Desktop document signing remains available only on Linux.
+The key-worker library keeps unlocked PKCS#12 keys in a separate Linux or Windows process. Linux applies address-space and CPU limits. Windows starts the worker suspended, assigns a job with committed-memory, user CPU and child-process limits, and kills it when the parent loses its job handle. Pipe operations have deadlines, and successful close is required before consuming signatures. Other platforms reject worker imports. Windows requests WER no-heap/no-UI reporting; privileged dumps and machine dump policies remain outside that guarantee. API contracts and limits are documented with rustdoc. The desktop application uses this worker for document signing on Linux and Windows.
 
-On Windows, build the process-control fixture with `cargo build --locked -p firmica-key-worker --example worker-fixture` before running the worker tests. They check native limit enforcement, blocked pipe deadlines, abandonment, process loss and RSA/P-256 CAdES output independently verified by OpenSSL. The fixture uses synthetic data and never opens a certificate store.
+On Windows, build the process-control fixture with `cargo build --locked -p firmica-key-worker --example worker-fixture` before running the worker tests. They check native limit enforcement, blocked pipe deadlines, abandonment, process loss and RSA/P-256 CAdES output independently verified by OpenSSL. The fixture uses synthetic data and never opens a certificate store. After building the desktop application, set `FIRMICA_TEST_WORKER` to the absolute companion executable path and run `cargo test --locked -p desktop -- --ignored --test-threads=1` for the desktop signing and cleanup tests.
+
+For native Windows dialog tests, install `playwright==1.58.0` and `pywinauto==0.6.9`, then run `python tests/interop/windows-signing.py --app /path/to/firmica.exe`. The test opens real file dialogs, checks consent and cancellation, and verifies RSA/P-256 output with OpenSSL. It enables WebView2 inspection only in its synthetic test process and saves evidence under `.test-artifacts/windows-signing/`. CI runs it against an extracted debug portable bundle (`python tools/build-desktop.py bundle --debug`).
 
 `firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux desktop signing screen uses this review API.
 
