@@ -411,20 +411,36 @@ pub(super) fn publish(staging: &Path, destination: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
     use std::process::Command;
+    use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 
-    fn acl(path: &Path, sddl: &str) {
-        let script = "$ErrorActionPreference = 'Stop'; $acl = Get-Acl -LiteralPath $env:FIRMICA_ACL_PATH; $acl.SetSecurityDescriptorSddlForm($env:FIRMICA_ACL_SDDL); Set-Acl -LiteralPath $env:FIRMICA_ACL_PATH -AclObject $acl";
-        let output = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .env("FIRMICA_ACL_PATH", path)
-            .env("FIRMICA_ACL_SDDL", sddl)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    fn acl(path: &Path, descriptor: &Allocation, protected: bool) {
+        let (mut present, mut defaulted, mut dacl) = (0, 0, ptr::null_mut());
+        // SAFETY: the owned descriptor and its ACL remain live for this fixture update.
+        unsafe {
+            assert_ne!(
+                GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted),
+                0
+            );
+            assert_ne!(present, 0);
+            let file = open(path, READ_CONTROL | WRITE_DAC).unwrap();
+            let inheritance = if protected {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
+            assert_eq!(
+                SetSecurityInfo(
+                    file.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | inheritance,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    dacl,
+                    ptr::null()
+                ),
+                0
+            );
+        }
     }
 
     #[test]
@@ -432,40 +448,31 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let base = temporary.path().join("config");
         let profile = initialize(&base, "https://example.invalid").unwrap();
-        for sddl in ["D:P(A;;FA;;;OW)(A;;FR;;;WD)", "D:AI(A;;FA;;;OW)"] {
-            acl(&profile.key, sddl);
-            assert!(matches!(load(&base), Err(Error::Permissions)));
-            let user = User::current().unwrap();
-            let descriptor = user.descriptor(false).unwrap();
-            let (mut present, mut defaulted, mut dacl) = (0, 0, ptr::null_mut());
-            // SAFETY: generated descriptor and writable ACL outputs remain live.
+        for (sddl, protected) in [
+            ("D:P(A;;FA;;;OW)(A;;FR;;;WD)", true),
+            ("D:AI(A;;FA;;;OW)", false),
+        ] {
+            let sddl = format!("{sddl}\0").encode_utf16().collect::<Vec<_>>();
+            let mut descriptor = ptr::null_mut();
+            // SAFETY: fixed terminated SDDL, writable LocalAlloc output.
             unsafe {
                 assert_ne!(
-                    GetSecurityDescriptorDacl(
-                        descriptor.0,
-                        &mut present,
-                        &mut dacl,
-                        &mut defaulted
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                        sddl.as_ptr(),
+                        1,
+                        &mut descriptor,
+                        ptr::null_mut()
                     ),
                     0
                 );
             }
-            let file = open(&profile.key, READ_CONTROL | WRITE_DAC).unwrap();
-            // SAFETY: a live writable handle and generated DACL restore this fixture only.
-            unsafe {
-                assert_eq!(
-                    SetSecurityInfo(
-                        file.as_raw_handle(),
-                        SE_FILE_OBJECT,
-                        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                        dacl,
-                        ptr::null()
-                    ),
-                    0
-                );
-            }
+            acl(&profile.key, &Allocation(descriptor), protected);
+            assert!(matches!(load(&base), Err(Error::Permissions)));
+            acl(
+                &profile.key,
+                &User::current().unwrap().descriptor(false).unwrap(),
+                true,
+            );
         }
         assert!(load(&base).unwrap().is_some());
         fs::write(&profile.key, vec![0; MAX_FILE_BYTES as usize + 1]).unwrap();
