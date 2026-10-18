@@ -294,7 +294,7 @@ pub(super) fn check_directory(path: &Path, private: bool) -> Result<(), Error> {
 pub(super) fn prepare(base: &Path) -> Result<PathBuf, Error> {
     fs::create_dir_all(base)?;
     check_directory(base, false)?;
-    let parent = base.join("firmica");
+    let parent = base.join(PROFILE_PARENT);
     let descriptor = User::current()?.descriptor(true)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -480,12 +480,27 @@ mod tests {
     }
 
     #[test]
+    fn provisioning_preserves_existing_dioxus_webview_data() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().join("config");
+        let cache = base.join("firmica");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("cache-fixture"), b"existing renderer data").unwrap();
+        initialize(&base, "https://example.invalid").unwrap();
+        assert!(load(&base).unwrap().is_some());
+        assert_eq!(
+            fs::read(cache.join("cache-fixture")).unwrap(),
+            b"existing renderer data"
+        );
+    }
+
+    #[test]
     fn directory_junctions_and_partial_profiles_fail_closed() {
         let temporary = tempfile::tempdir().unwrap();
         let base = temporary.path().join("config");
         let profile = initialize(&base, "https://example.invalid").unwrap();
-        let directory = base.join("firmica/browser-tls");
-        let saved = base.join("firmica/saved");
+        let directory = base.join(PROFILE_PARENT).join("browser-tls");
+        let saved = base.join(PROFILE_PARENT).join("saved");
         fs::rename(&directory, &saved).unwrap();
         // PowerShell creates a junction without requiring symlink privileges.
         let output = Command::new("powershell.exe")

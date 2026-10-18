@@ -81,7 +81,7 @@ pub(super) fn prepare(base: &Path) -> Result<PathBuf, Error> {
         .mode(0o700)
         .create(base)?;
     check_directory(base, false)?;
-    let parent = base.join("firmica");
+    let parent = base.join(PROFILE_PARENT);
     match fs::DirBuilder::new().mode(0o700).create(&parent) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}

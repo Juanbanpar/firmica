@@ -132,7 +132,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
         # Registered before acquiring resources so deletion runs after all closes.
         cleanup.callback(remove_installation)
         try:
-            profile = Path(os.environ["LOCALAPPDATA"]) / "firmica" / "browser-tls"
+            profile = Path(os.environ["LOCALAPPDATA"]) / "firmica-config" / "browser-tls"
             assert not profile.parent.exists(), "refusing to modify an existing Firmica configuration"
             def remove_profile():
                 if profile.parent.exists():

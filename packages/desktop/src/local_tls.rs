@@ -47,6 +47,11 @@ use storage::{check_directory, read_private, write_private};
 #[cfg(windows)]
 use windows as storage;
 
+#[cfg(target_os = "linux")]
+const PROFILE_PARENT: &str = "firmica";
+#[cfg(windows)]
+const PROFILE_PARENT: &str = "firmica-config";
+
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
 
@@ -153,15 +158,15 @@ fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {
 fn load(base: &Path) -> Result<Option<Profile>, Error> {
     for (path, private) in [
         (base.to_path_buf(), false),
-        (base.join("firmica"), true),
-        (base.join("firmica/browser-tls"), true),
+        (base.join(PROFILE_PARENT), true),
+        (base.join(PROFILE_PARENT).join("browser-tls"), true),
     ] {
         match check_directory(&path, private) {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             result => result?,
         }
     }
-    read_profile(&base.join("firmica/browser-tls")).map(Some)
+    read_profile(&base.join(PROFILE_PARENT).join("browser-tls")).map(Some)
 }
 
 fn read_profile(directory: &Path) -> Result<Profile, Error> {

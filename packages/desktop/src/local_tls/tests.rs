@@ -10,7 +10,7 @@ fn provisioning_is_private_unique_and_verifiable_without_a_retained_ca_key() {
     let temporary = tempfile::tempdir().unwrap();
     let base = temporary.path().join("config");
     let profile = initialize(&base, ORIGIN).unwrap();
-    let directory = base.join("firmica/browser-tls");
+    let directory = base.join(PROFILE_PARENT).join("browser-tls");
     #[cfg(target_os = "linux")]
     assert_eq!(fs::metadata(&directory).unwrap().mode() & 0o777, 0o700);
     let mut names = fs::read_dir(&directory)
@@ -164,7 +164,7 @@ fn existing_and_concurrently_created_profiles_are_never_replaced() {
         load(&base).unwrap().unwrap().leaf.to_der().unwrap(),
         first.leaf.to_der().unwrap()
     );
-    assert_eq!(fs::read_dir(base.join("firmica")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(base.join(PROFILE_PARENT)).unwrap().count(), 1);
 }
 
 #[cfg(target_os = "linux")]
@@ -174,8 +174,8 @@ fn unsafe_permissions_symlinks_and_partial_profiles_fail_closed() {
     let base = temporary.path().join("config");
     assert!(load(&base).unwrap().is_none());
     let profile = initialize(&base, ORIGIN).unwrap();
-    let directory = base.join("firmica/browser-tls");
-    for path in [&base.join("firmica"), &directory, &profile.key] {
+    let directory = base.join(PROFILE_PARENT).join("browser-tls");
+    for path in [&base.join(PROFILE_PARENT), &directory, &profile.key] {
         let original = fs::metadata(path).unwrap().permissions();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(load(&base), Err(Error::Permissions)));
