@@ -52,6 +52,7 @@ def main():
     shutil.copy2(worker, application / f"firmica-key-worker{suffix}")
 
     if system == "Windows":
+        shutil.copy2(ROOT / "LICENSE", application / "LICENSE")
         root = Path(os.environ["OPENSSL_DIR"])
         for name in ("libcrypto-3-x64.dll", "libssl-3-x64.dll"):
             candidates = [directory / name for directory in (root / "bin", root)]
