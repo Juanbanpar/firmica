@@ -32,6 +32,7 @@ fn main() {
         }
         "malformed" => {
             io::stdout().write_all(&u32::MAX.to_be_bytes()).unwrap();
+            io::stdout().flush().unwrap();
             thread::sleep(Duration::from_secs(60));
         }
         "nonzero" => {
