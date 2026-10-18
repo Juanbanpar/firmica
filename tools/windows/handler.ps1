@@ -86,24 +86,31 @@ if ($Action -eq 'Install') {
             }
         } finally { $provider.Dispose() }
     }
-    if (!$TlsCertificate -or !$TlsKey -or !$Origin) {
-        throw 'Install requires -TlsCertificate, -TlsKey and -Origin.'
-    }
-    $browserOrigin = [uri] $Origin
-    if (!$browserOrigin.IsAbsoluteUri -or $browserOrigin.Scheme -cnotin @('http', 'https') -or
-        $browserOrigin.UserInfo -or $browserOrigin.Query -or $browserOrigin.Fragment -or
-        $browserOrigin.GetLeftPart([UriPartial]::Authority) -cne $Origin) {
-        throw 'Origin must be one exact HTTP(S) origin without a trailing slash, credentials, path, query or fragment.'
-    }
-    $certificateFile = Get-Item -LiteralPath $TlsCertificate
-    $keyFile = Get-Item -LiteralPath $TlsKey
-    foreach ($file in @($certificateFile, $keyFile)) {
-        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw 'TLS inputs must be regular files, not reparse points.'
+    if (!$TlsCertificate -and !$TlsKey -and !$Origin) {
+        # The CLI validates the private profile without opening a GUI or changing trust.
+        & $application tls status
+        if ($LASTEXITCODE -ne 0) { throw 'Configure a valid private profile with firmica.exe tls init --origin <origin> first.' }
+        $command = (Quote-Argument $application) + ' -- "%1"'
+    } else {
+        if (!$TlsCertificate -or !$TlsKey -or !$Origin) {
+            throw 'Supply all of -TlsCertificate, -TlsKey and -Origin, or omit all three to use the private profile.'
         }
+        $browserOrigin = [uri] $Origin
+        if (!$browserOrigin.IsAbsoluteUri -or $browserOrigin.Scheme -cnotin @('http', 'https') -or
+            $browserOrigin.UserInfo -or $browserOrigin.Query -or $browserOrigin.Fragment -or
+            $browserOrigin.GetLeftPart([UriPartial]::Authority) -cne $Origin) {
+            throw 'Origin must be one exact HTTP(S) origin without a trailing slash, credentials, path, query or fragment.'
+        }
+        $certificateFile = Get-Item -LiteralPath $TlsCertificate
+        $keyFile = Get-Item -LiteralPath $TlsKey
+        foreach ($file in @($certificateFile, $keyFile)) {
+            if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'TLS inputs must be regular files, not reparse points.'
+            }
+        }
+        $command = (Quote-Argument $application) + ' --tls-cert ' + (Quote-Argument $certificateFile.FullName) +
+            ' --tls-key ' + (Quote-Argument $keyFile.FullName) + ' --origin ' + (Quote-Argument $Origin) + ' -- "%1"'
     }
-    $command = (Quote-Argument $application) + ' --tls-cert ' + (Quote-Argument $certificateFile.FullName) +
-        ' --tls-key ' + (Quote-Argument $keyFile.FullName) + ' --origin ' + (Quote-Argument $Origin) + ' -- "%1"'
 
     # Never overwrite an existing protocol owner, including a machine registration.
     $scheme = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey('afirma')

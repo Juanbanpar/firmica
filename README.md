@@ -72,18 +72,20 @@ On Linux, use the packaged executable with a quoted URI:
 
 Subsequent invocations are forwarded to the running instance through a private per-user Unix socket. A WSS review expires when its transport stops accepting decisions; asynchronous reconnects preserve the review within the session. Bare URI requests cannot receive a signature: **Reject** cancels, and **Acknowledge review** reports that the operation is unsupported.
 
-On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. Register the extracted Windows bundle from its directory after preparing a loopback TLS certificate and key in a private directory:
+On Windows, `firmica.exe "afirma://save?ver=4"` forwards subsequent launches to the running application through a local named pipe restricted to the same logon session. Delivery is acknowledged only after a valid URI enters the bounded application queue; busy or unresponsive instances cause the secondary process to fail. From the extracted Windows bundle, create the private browser TLS profile and register the handler:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Install -TlsCertificate 'C:\private\tls.pem' -TlsKey 'C:\private\tls.key' -Origin 'https://example.org'
+.\firmica.exe tls init --origin 'https://example.org'
+.\firmica.exe tls status
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Install
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Status
 # Before removing or moving this bundle:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\handler.ps1 -Action Uninstall
 ```
 
-Registration adds Firmica to this user's applications and uses the quoted bundle executable with the supplied TLS configuration for cold launches. An existing `afirma` handler and protected Windows default choices are preserved; select Firmica for `afirma` in **Settings > Apps > Default apps** when another application is selected. Uninstall removes only this bundle's registration. Re-register after moving the bundle. Static installation/TLS paths containing percent signs are rejected because Windows uses percent sequences as association placeholders.
+Registration adds Firmica to this user's applications and uses the quoted bundle executable for cold launches. Without TLS arguments it first validates the private profile, which the application loads automatically. An existing `afirma` handler and protected Windows default choices are preserved; select Firmica for `afirma` in **Settings > Apps > Default apps** when another application is selected. Uninstall removes only this bundle's registration. Re-register after moving the bundle. Static installation/TLS paths containing percent signs are rejected because Windows uses percent sequences as association placeholders.
 
-The TLS key must remain private, the certificate must cover `127.0.0.1`, and the requesting browser must trust its issuer. Registration does not install trust or generate keys. Automatic TLS-profile setup is available on Linux. Windows can also be launched directly with `--tls-cert`, `--tls-key` and `--origin`.
+Windows stores the profile under the current user's Local AppData known folder in `firmica\browser-tls`. Directories and files have protected ACLs granting access only to that user. Reparse points, public access, mismatched keys, incomplete profiles and invalid or expired identities are rejected. Administrative access remains outside this protection. Browser trust is an explicit import step using the printed CA fingerprint. Registration does not install trust or generate keys. To use an existing TLS identity instead, supply all of `-TlsCertificate`, `-TlsKey` and `-Origin` to `handler.ps1`, or launch with `--tls-cert`, `--tls-key` and `--origin`; its certificate must cover `127.0.0.1` and the requesting browser must trust its issuer.
 
 With an installed Linux package, create the per-user browser TLS profile once, using the exact website origin without a trailing slash:
 
@@ -92,7 +94,7 @@ firmica tls init --origin https://example.org
 firmica tls status
 ```
 
-The commands work without a graphical session. The profile lives in `$XDG_CONFIG_HOME/firmica/browser-tls`, or `$HOME/.config/firmica/browser-tls` when `XDG_CONFIG_HOME` is unset. Its directories are private and its files have mode `0600`. Setup never replaces an existing profile. It creates a unique CA and a server certificate for `127.0.0.1`, valid for 365 days. The CA includes name constraints for `localhost` and `127.0.0.1`; its signing key is discarded after issuing the server certificate. Only the server key is stored.
+The TLS commands work without a graphical session on Linux and Windows. On Linux, the profile lives in `$XDG_CONFIG_HOME/firmica/browser-tls`, or `$HOME/.config/firmica/browser-tls` when `XDG_CONFIG_HOME` is unset. Its directories are private and its files have mode `0600`. On both platforms, setup never replaces an existing profile. It creates a unique CA and a server certificate for `127.0.0.1`, valid for 365 days. The CA includes name constraints for `localhost` and `127.0.0.1`; its signing key is discarded after issuing the server certificate. Only the server key is stored.
 
 Setup prints the public `ca.pem` path and its SHA-256 fingerprint. Check that fingerprint before importing the CA into the intended browser profile for website authentication. In Firefox, use **Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import**. Firmica does not install trust entries, change TLS verification or register a default URI handler. Keep browser trust scoped to the profile that needs it.
 
@@ -191,6 +193,6 @@ For native Windows dialog tests, install `playwright==1.58.0`, `pywinauto==0.6.9
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
 
-The manually dispatched **Windows bundle QA** workflow can replay the native dialog test against a CI run’s `windows-invocation` artifact. It checks that the application and builder sources match the current checkout before testing the extracted ZIP.
+The manually dispatched **Windows bundle QA** workflow can replay the native dialog and browser tests against a CI run’s `windows-invocation` artifact. It checks that the application and builder sources match the current checkout before testing the extracted ZIP.
 
-For Windows browser interoperability tests, install the native UI test tooling above and Firefox with `python -m playwright install firefox`, then run `python tests/interop/windows-browser.py --app /path/to/firmica.exe` on a disposable Windows account with no existing `afirma` association. The test uses the bundled registration script, unmodified pinned AutoScript, a private Firefox copy/profile with its own test CA, real native consent, and OpenSSL verification. It checks cold launch, warm delivery, cancellation and RSA/P-256 results, then removes its registration. It does not reset protected Windows defaults or alter OS trust. Evidence is saved under `.test-artifacts/windows-browser/`.
+For Windows browser interoperability tests, install the native UI test tooling above and Firefox with `python -m playwright install firefox`, then run `python tests/interop/windows-browser.py --app /path/to/firmica.exe` on a disposable Windows account with no existing `afirma` association. The test uses the bundled registration script, unmodified pinned AutoScript, the packaged TLS provisioning commands, a private Firefox copy/profile trusting the generated CA, real native consent, and OpenSSL verification. A separate fresh Firefox profile must reject that CA. It checks cold launch, warm delivery, cancellation and RSA/P-256 results, then removes its newly generated TLS profile and registration. The test refuses an existing Firmica configuration and takes about five minutes because it waits for two actual listener lifetimes. It does not reset protected Windows defaults or alter OS trust. Evidence is saved under `.test-artifacts/windows-browser/`.

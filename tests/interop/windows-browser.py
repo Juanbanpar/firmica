@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -72,14 +73,6 @@ def main():
                 raise RuntimeError(completed.stdout + completed.stderr)
             return completed.stdout
 
-        openssl("req", "-x509", "-newkey", "rsa:2048", "-noenc", "-days", "1", "-subj", "/CN=Firmica synthetic local CA",
-                "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-                "-keyout", "ca.key", "-out", "ca.pem")
-        openssl("req", "-newkey", "rsa:2048", "-noenc", "-subj", "/CN=127.0.0.1", "-keyout", "tls.key", "-out", "tls.csr")
-        (directory / "tls.ext").write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n")
-        openssl("x509", "-req", "-in", "tls.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
-                "-days", "1", "-out", "tls.pem", "-extfile", "tls.ext")
-        (directory / "ca.key").unlink()
         for algorithm in ("rsa", "ec"):
             specification = ["rsa:2048"] if algorithm == "rsa" else ["ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
             openssl("req", "-x509", "-newkey", *specification, "-noenc", "-days", "1",
@@ -139,7 +132,27 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
         # Registered before acquiring resources so deletion runs after all closes.
         cleanup.callback(remove_installation)
         try:
-            registration("Install", "-TlsCertificate", directory / "tls.pem", "-TlsKey", directory / "tls.key", "-Origin", origin)
+            profile = Path(os.environ["LOCALAPPDATA"]) / "firmica" / "browser-tls"
+            assert not profile.parent.exists(), "refusing to modify an existing Firmica configuration"
+            def remove_profile():
+                if profile.parent.exists():
+                    shutil.rmtree(profile.parent)
+            # This is an explicitly disposable Windows account; only the newly
+            # generated profile is removed, after processes and registration close.
+            cleanup.callback(remove_profile)
+            def tls(*arguments, success=True):
+                result = subprocess.run([str(app), "tls", *arguments], env=environment,
+                                        capture_output=True, text=True, timeout=30)
+                assert (result.returncode == 0) == success, result.stdout + result.stderr
+                return result.stdout
+            tls("status", success=False)
+            initialized = tls("init", "--origin", origin)
+            assert sorted(path.name for path in profile.iterdir()) == ["ca.pem", "certificate.pem", "origin", "private-key.pem"]
+            fingerprint = openssl("x509", "-in", str(profile / "ca.pem"), "-fingerprint", "-sha256", "-noout").decode().strip().split("=", 1)[1]
+            assert fingerprint in initialized and fingerprint in tls("status")
+            tls("init", "--origin", origin, success=False)
+            registration("Install")
+            evidence["checks"].append("packaged TLS CLI provisions and validates a unique private profile without retaining a CA key")
             def unregister():
                 registration("Uninstall")
                 assert "not registered" in registration("Status")
@@ -154,7 +167,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             # this private browser copy/profile, never the Windows trust store.
             policy = distribution / "policies.json"
             policy.write_text(json.dumps({"policies": {
-                "Certificates": {"ImportEnterpriseRoots": False, "Install": [str(directory / "ca.pem")]},
+                "Certificates": {"ImportEnterpriseRoots": False, "Install": [str(profile / "ca.pem")]},
                 "Handlers": {"schemes": {"afirma": {"action": "useSystemDefault", "ask": False}}},
             }}))
             # Playwright's Firefox uses its explicit policy path instead of
@@ -199,7 +212,8 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             native_browser, native_page = windows_gui.connect(playwright, port, observed, evidence)
             query = f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
             evidence["launch_command"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
-            evidence["checks"].append("Firefox cold-launches the installed URI command with TLS configuration")
+            assert "--tls-cert" not in evidence["launch_command"] and "--tls-key" not in evidence["launch_command"]
+            evidence["checks"].append("Firefox cold-launches the registered app and its automatically loaded private TLS profile")
             print("Registered handler cold-launched the native application", flush=True)
             for scenario in ("rsa", "cancel", "ec"):
                 if scenario != "rsa":
@@ -270,6 +284,21 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                 assert windows_gui.processes(name="firmica.exe") == [pid]
                 evidence["checks"].append(f"{scenario} browser signature and selected certificate verify after worker exit")
                 print(f"OpenSSL verified the {scenario} browser signature", flush=True)
+                if scenario == "rsa":
+                    untrusted = playwright.firefox.launch(headless=True, env=environment)
+                    try:
+                        fresh = untrusted.new_page()
+                        fresh.goto(origin)
+                        url = next(url for direction, url, payload in frames if direction == "received" and payload == "OK")
+                        outcome = fresh.evaluate("""url => Promise.race([
+                            new Promise(resolve => { const ws = new WebSocket(url);
+                                ws.onopen = () => { ws.close(); resolve('open'); };
+                                ws.onerror = () => resolve('error'); }),
+                            new Promise(resolve => setTimeout(() => resolve('timeout'), 5000))])""", url)
+                        assert outcome == "error", outcome
+                    finally:
+                        untrusted.close()
+                    evidence["checks"].append("a fresh Firefox profile rejects the generated CA while the trusted profile continues")
                 native_page.locator("#browser-status").wait_for()
             assert any(direction == "received" and payload == "#wait" for direction, _, payload in frames)
             assert any(direction == "received" and payload == "OK" and url.startswith("wss://127.0.0.1:") for direction, url, payload in frames)
