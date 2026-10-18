@@ -54,7 +54,7 @@ const LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
 pub enum Command {
     /// Create a unique local TLS identity. Existing profiles are never replaced.
     Init {
-        /// Exact browser origin, such as https://example.org (without a trailing slash).
+        /// Exact browser origin, such as `https://example.org` (without a trailing slash).
         #[arg(long)]
         origin: String,
     },
