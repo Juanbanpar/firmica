@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import platform
 import shutil
-import socket
 import subprocess
 import tempfile
 import threading
@@ -209,13 +208,15 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                     previous = next(url for direction, url, payload in reversed(frames)
                                     if direction == "received" and payload == "OK")
                     previous_port = urlsplit(previous).port
+                    query = ("Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.State -eq 'Listen' -and "
+                             f"$_.OwningProcess -eq {pid} -and $_.LocalPort -eq {previous_port}"
+                             " } | Select-Object -ExpandProperty LocalPort")
                     deadline = time.monotonic() + 130
                     while True:
                         assert observed.poll() is None, "the native application exited between browser sessions"
-                        try:
-                            with socket.create_connection(("127.0.0.1", previous_port), timeout=1):
-                                pass
-                        except ConnectionRefusedError:
+                        listening = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive",
+                                                             "-Command", query], text=True, timeout=15).strip()
+                        if not listening:
                             break
                         assert time.monotonic() < deadline, "the previous WSS listener did not expire"
                         browser_page.wait_for_timeout(1000)
