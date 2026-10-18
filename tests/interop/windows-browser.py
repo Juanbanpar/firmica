@@ -9,10 +9,12 @@ import json
 from pathlib import Path
 import platform
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 from windows import free_port, wait_for, windows_for
 import windows_gui
@@ -202,6 +204,22 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             print("Registered handler cold-launched the native application", flush=True)
             for scenario in ("rsa", "cancel", "ec"):
                 if scenario != "rsa":
+                    # Each bootstrap admits one operation for its 120 s lifetime.
+                    # Let the listener expire before AutoScript probes/relaunches.
+                    previous = next(url for direction, url, payload in reversed(frames)
+                                    if direction == "received" and payload == "OK")
+                    previous_port = urlsplit(previous).port
+                    deadline = time.monotonic() + 130
+                    while True:
+                        assert observed.poll() is None, "the native application exited between browser sessions"
+                        try:
+                            with socket.create_connection(("127.0.0.1", previous_port), timeout=1):
+                                pass
+                        except ConnectionRefusedError:
+                            break
+                        assert time.monotonic() < deadline, "the previous WSS listener did not expire"
+                        browser_page.wait_for_timeout(1000)
+                    print("Previous listener expired; starting a fresh browser session", flush=True)
                     browser_page.goto(origin)
                     browser_page.locator(f"#{scenario}").click()
                 native_page.locator("#request-operation").wait_for()
@@ -211,6 +229,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                 assert native_page.locator("#sign-algorithm").count() == 0
                 assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
                 assert not browser_page.evaluate("window.result")
+                assert windows_gui.processes(name="firmica.exe") == [pid]
                 if scenario == "cancel":
                     native_page.locator("#reject-request").click()
                     browser_page.wait_for_function("window.result", timeout=30000)
@@ -256,6 +275,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             native_page.screenshot(path=str(options.output / "native.png"), full_page=True)
             browser_page.screenshot(path=str(options.output / "browser.png"), full_page=True)
             evidence["checks"].append("unmodified AutoScript uses trusted loopback WSS without disabling TLS verification")
+            evidence["checks"].append("fresh browser bootstraps reuse the native process after listener expiry")
             browser.close()
             browser = None
             evidence["passed"] = True

@@ -133,7 +133,7 @@ jobs:
           cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - name: Verify native Windows signing from the extracted portable bundle
         if: runner.os == 'Windows'
-        timeout-minutes: 6
+        timeout-minutes: 8
         shell: pwsh
         run: |
           python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
