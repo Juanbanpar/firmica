@@ -40,12 +40,16 @@ jobs:
       - name: Install native UI test tooling
         run: python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
       - name: Exercise the extracted portable application
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $env:OPENSSL_DIR = Join-Path $env:ProgramFiles OpenSSL
-          python tests/interop/windows-signing.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
+          python -u tests/interop/windows-signing.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'native signing test failed' }
           python -m playwright install firefox
-          python tests/interop/windows-browser.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Firefox installation failed' }
+          python -u tests/interop/windows-browser.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'browser signing test failed' }
       - name: Save native evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

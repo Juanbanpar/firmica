@@ -164,11 +164,13 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                 firefox_user_prefs={"network.protocol-handler.external.afirma": True,
                                     "network.protocol-handler.warn-external.afirma": False,
                                     "network.protocol-handler.prompt-without-user-activation": False})
+            print("Private Firefox launched with the synthetic CA policy", flush=True)
             cleanup.callback(browser.close)
             browser_page = browser.new_page()
             browser_page.goto("about:policies")
             evidence["firefox_policies"] = browser_page.locator("body").inner_text()
             assert "Certificates" in evidence["firefox_policies"], evidence["firefox_policies"]
+            print("Firefox reports the certificate policy active", flush=True)
             frames = []
 
             def socket_started(socket):
@@ -201,11 +203,13 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             query = f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
             evidence["launch_command"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
             evidence["checks"].append("Firefox cold-launches the installed URI command with TLS configuration")
+            print("Registered handler cold-launched the native application", flush=True)
             for scenario in ("rsa", "cancel", "ec"):
                 if scenario != "rsa":
                     browser_page.goto(origin)
                     browser_page.locator(f"#{scenario}").click()
                 native_page.locator("#request-operation").wait_for()
+                print(f"Native review received: {scenario}", flush=True)
                 native_page.locator("#sign-language").click()
                 assert native_page.locator("#sign-document").count() == 0
                 assert native_page.locator("#sign-algorithm").count() == 0
@@ -249,6 +253,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                 assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
                 assert windows_gui.processes(name="firmica.exe") == [pid]
                 evidence["checks"].append(f"{scenario} browser signature and selected certificate verify after worker exit")
+                print(f"OpenSSL verified the {scenario} browser signature", flush=True)
                 native_page.locator("#browser-status").wait_for()
             assert any(direction == "received" and payload == "#wait" for direction, _, payload in frames)
             assert any(direction == "received" and payload == "OK" and url.startswith("wss://127.0.0.1:") for direction, url, payload in frames)
@@ -271,6 +276,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             raise
         finally:
             (options.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
+            print(json.dumps(evidence, indent=2), flush=True)
     print(json.dumps(evidence, indent=2))
 
 

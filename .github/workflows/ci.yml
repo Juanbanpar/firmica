@@ -133,17 +133,22 @@ jobs:
           cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - name: Verify native Windows signing from the extracted portable bundle
         if: runner.os == 'Windows'
+        timeout-minutes: 6
         shell: pwsh
         run: |
           python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
+          if ($LASTEXITCODE -ne 0) { throw 'native UI tooling installation failed' }
           $archive = @(Get-ChildItem target/dx/firmica/bundle/windows/*.zip)
           if ($archive.Count -ne 1) { throw "expected exactly one portable bundle" }
           $archive = $archive[0]
           $destination = Join-Path $env:RUNNER_TEMP 'firmica-portable'
           Expand-Archive $archive.FullName $destination
-          python tests/interop/windows-signing.py --app "$destination\firmica.exe"
+          python -u tests/interop/windows-signing.py --app "$destination\firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'native signing test failed' }
           python -m playwright install firefox
-          python tests/interop/windows-browser.py --app "$destination\firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Firefox installation failed' }
+          python -u tests/interop/windows-browser.py --app "$destination\firmica.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'browser signing test failed' }
       - name: Save Windows invocation and signing evidence
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
