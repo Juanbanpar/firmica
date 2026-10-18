@@ -114,12 +114,18 @@ def main():
                 def dialog(selector, filename):
                     page.locator(selector).click()
                     native = automation.window(class_name="#32770")
-                    native.wait("visible", timeout=15)
+                    native.wait("ready", timeout=15)
+                    native.set_focus()
                     if filename is None:
-                        native.child_window(control_id=2, class_name="Button").click()
+                        native.child_window(control_id=2, class_name="Button").click_input()
                     else:
-                        native.child_window(class_name="Edit").set_edit_text(str(filename))
-                        native.child_window(control_id=1, class_name="Button").click()
+                        filename_control = native.child_window(class_name="Edit")
+                        filename_control.wait("ready", timeout=15)
+                        filename_control.set_edit_text(str(filename))
+                        assert filename_control.window_text() == str(filename)
+                        confirm = native.child_window(control_id=1, class_name="Button")
+                        confirm.wait("ready", timeout=15)
+                        confirm.click_input()
                     native.wait_not("visible", timeout=15)
 
                 def prepare(algorithm="rsa", secret=password, attached=False):
