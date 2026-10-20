@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 
-from windows import free_port, wait_for, windows_for
+from windows_gui import free_port, wait_for, windows_for
 import windows_gui
 
 

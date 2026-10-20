@@ -16,7 +16,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from windows import free_port, wait_for, windows_for
+from windows_gui import free_port, wait_for, windows_for
 import windows_gui
 
 ROOT = Path(__file__).resolve().parents[2]

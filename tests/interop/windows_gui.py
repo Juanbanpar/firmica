@@ -6,8 +6,30 @@ import http.client
 import json
 import os
 import subprocess
+import socket
+import time
 
-from windows import wait_for
+def free_port():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def wait_for(check, process, seconds=30):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"application exited with status {process.returncode}")
+        result = check()
+        if result:
+            return result
+        time.sleep(0.1)
+    raise TimeoutError("native UI check timed out")
+
+
+def windows_for(pid):
+    from pywinauto.findwindows import find_windows
+    return find_windows(process=pid, title="Firmica", visible_only=True, top_level_only=True)
 
 
 @contextlib.contextmanager
