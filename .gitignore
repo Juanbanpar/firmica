@@ -15,5 +15,4 @@ __pycache__/
 
 # Local project notes and generated assistant documentation.
 /docs/
-/AGENTS.md
 /packages/*/README.md
