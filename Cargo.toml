@@ -12,6 +12,8 @@ members = [
     "crates/signing",
     "crates/certificates",
     "crates/cades",
+    "crates/pades",
+    "crates/xades",
     "crates/key-worker",
     "crates/validation",
 ]
@@ -28,6 +30,8 @@ firmica-transport = { path = "crates/transport" }
 firmica-signing = { path = "crates/signing" }
 firmica-certificates = { path = "crates/certificates" }
 firmica-cades = { path = "crates/cades" }
+firmica-pades = { path = "crates/pades" }
+firmica-xades = { path = "crates/xades" }
 firmica-key-worker = { path = "crates/key-worker" }
 firmica-validation = { path = "crates/validation" }
 openssl = "0.10.81"

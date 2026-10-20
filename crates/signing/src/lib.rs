@@ -1,4 +1,5 @@
-//! Cryptographic signing contracts independent of document formats, key storage and UI.
+//! Signing-provider contracts and owned format choices, independent of encoders,
+//! key storage and UI.
 //!
 //! These operations neither authorize a signature nor establish certificate trust.
 //! Callers must obtain consent and apply certificate policy before signing. Implementations
@@ -6,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+pub mod format;
 
 /// Precisely specified initial algorithms; no implicit hash or RSA padding selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

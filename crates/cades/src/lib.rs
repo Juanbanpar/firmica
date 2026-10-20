@@ -70,14 +70,7 @@ pub const MAX_CERTIFICATES: usize = 32;
 /// Maximum DER length of each supplied certificate (64 KiB).
 pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 
-/// Whether the signature embeds the exact content bytes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ContentMode {
-    /// Include an OCTET STRING, including for empty content.
-    Attached,
-    /// Omit eContent; verifiers must receive the original bytes separately.
-    Detached,
-}
+pub use firmica_signing::format::ContentMode;
 
 /// Explicit choices for one signing operation; no algorithm or clock defaults.
 #[derive(Clone, Copy, Debug)]
@@ -148,9 +141,44 @@ pub fn sign(
     content: &[u8],
     options: SigningOptions,
 ) -> Result<Vec<u8>, CadesError> {
+    if content.len() > MAX_CONTENT_BYTES {
+        return Err(CadesError::InputTooLarge);
+    }
+    encode(
+        key,
+        content,
+        Sha256::digest(content).into(),
+        options.algorithm,
+        options.mode,
+        Some(options.signing_time),
+    )
+}
+
+/// Encode the detached CMS value for a PDF signature's SHA-256 ByteRange digest.
+///
+/// Omits the CMS signing-time attribute, as required by ETSI EN 319 142-1 §6.3;
+/// the PDF signature dictionary must supply `/M` instead. This is a format-layer
+/// interface, not authorization to sign a caller-provided digest. The PDF encoder
+/// must compute the digest itself from the reviewed document and incremental update.
+/// Certificate limits, provider verification and errors are the same as [`sign`].
+pub fn sign_pdf_digest(
+    key: &mut dyn SigningKey,
+    digest: [u8; 32],
+    algorithm: SignatureAlgorithm,
+) -> Result<Vec<u8>, CadesError> {
+    encode(key, &[], digest, algorithm, ContentMode::Detached, None)
+}
+
+fn encode(
+    key: &mut dyn SigningKey,
+    content: &[u8],
+    content_digest: [u8; 32],
+    algorithm: SignatureAlgorithm,
+    mode: ContentMode,
+    signing_time: Option<SystemTime>,
+) -> Result<Vec<u8>, CadesError> {
     let identity = key.identity();
-    if content.len() > MAX_CONTENT_BYTES
-        || identity.additional_certificates.len() >= MAX_CERTIFICATES
+    if identity.additional_certificates.len() >= MAX_CERTIFICATES
         || std::iter::once(&identity.certificate_der)
             .chain(&identity.additional_certificates)
             .any(|der| der.len() > MAX_CERTIFICATE_BYTES)
@@ -161,7 +189,7 @@ pub fn sign(
         .into_iter()
         .find(|input| {
             key.capabilities().contains(&SigningCapability {
-                algorithm: options.algorithm,
+                algorithm,
                 input: *input,
             })
         })
@@ -179,29 +207,37 @@ pub fn sign(
         }
     }
     let certificates = Some(CertificateSet::try_from(certificates)?);
-    let time = GeneralizedTime::from_system_time(options.signing_time)
-        .map_err(|_| CadesError::InvalidTime)?;
-    let time = if time.to_date_time().year() <= UtcTime::MAX_YEAR {
-        Time::UtcTime(
-            UtcTime::from_date_time(time.to_date_time()).map_err(|_| CadesError::InvalidTime)?,
-        )
-    } else {
-        Time::GeneralTime(time)
-    };
+    let time = signing_time
+        .map(|time| {
+            let time =
+                GeneralizedTime::from_system_time(time).map_err(|_| CadesError::InvalidTime)?;
+            Ok::<_, CadesError>(if time.to_date_time().year() <= UtcTime::MAX_YEAR {
+                Time::UtcTime(
+                    UtcTime::from_date_time(time.to_date_time())
+                        .map_err(|_| CadesError::InvalidTime)?,
+                )
+            } else {
+                Time::GeneralTime(time)
+            })
+        })
+        .transpose()?;
     let binding = SigningCertificateV2 {
         certs: vec![EssCertIdV2 {
             cert_hash: OctetString::new(Sha256::digest(&identity.certificate_der).to_vec())?,
         }],
     };
-    let attrs = SignedAttributes::try_from(vec![
+    let mut attributes = vec![
         attribute(CONTENT_TYPE, Any::encode_from(&DATA)?)?,
         attribute(
             MESSAGE_DIGEST,
-            Any::encode_from(&OctetString::new(Sha256::digest(content).to_vec())?)?,
+            Any::encode_from(&OctetString::new(content_digest.to_vec())?)?,
         )?,
-        attribute(SIGNING_TIME, Any::encode_from(&time)?)?,
         attribute(SIGNING_CERTIFICATE_V2, Any::encode_from(&binding)?)?,
-    ])?;
+    ];
+    if let Some(time) = time {
+        attributes.push(attribute(SIGNING_TIME, Any::encode_from(&time)?)?);
+    }
+    let attrs = SignedAttributes::try_from(attributes)?;
     let signed_bytes = attrs.to_der()?;
     let digest = Sha256::digest(&signed_bytes).into();
     let input = match input_kind {
@@ -209,12 +245,12 @@ pub fn sign(
         InputKind::Sha256Digest => SigningInput::Sha256Digest(&digest),
     };
     // Prepare the potentially large content encoding before touching the private key.
-    let econtent = match options.mode {
+    let econtent = match mode {
         ContentMode::Attached => Some(Any::encode_from(&OctetString::new(content)?)?),
         ContentMode::Detached => None,
     };
-    let signature = key.sign(options.algorithm, input)?;
-    if signature.algorithm != options.algorithm
+    let signature = key.sign(algorithm, input)?;
+    if signature.algorithm != algorithm
         || signature.value.is_empty()
         || signature.value.len() > MAX_SIGNATURE_BYTES
     {
@@ -224,7 +260,7 @@ pub fn sign(
         oid: SHA256,
         parameters: None,
     };
-    let signature_algorithm = match options.algorithm {
+    let signature_algorithm = match algorithm {
         SignatureAlgorithm::RsaPkcs1v15Sha256 => AlgorithmIdentifierOwned {
             oid: ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1"),
             parameters: Some(Any::null()),

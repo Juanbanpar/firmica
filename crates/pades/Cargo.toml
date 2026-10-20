@@ -1,0 +1,22 @@
+[package]
+name = "firmica-pades"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+firmica-signing.workspace = true
+firmica-cades.workspace = true
+lopdf = { version = "0.45.0", default-features = false }
+der = { version = "0.7", features = ["std"] }
+sha2 = "0.10"
+thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+lopdf = { version = "0.45.0", default-features = false, features = ["wasm_js"] }
+
+[dev-dependencies]
+firmica-certificates.workspace = true
+openssl.workspace = true
+secrecy.workspace = true
+tempfile = "3"

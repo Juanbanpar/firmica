@@ -173,6 +173,35 @@ fn attribute(data: &SignedData, id: &str) -> Any {
 }
 
 #[test]
+fn pdf_cms_omits_signing_time_and_retains_ess_binding() {
+    for algorithm in [RSA, EC] {
+        let mut fixture = fixture(algorithm);
+        let encoded =
+            firmica_cades::sign_pdf_digest(&mut fixture.provider, sha256(MESSAGE), algorithm)
+                .unwrap();
+        let data = parse(&encoded);
+        assert!(data.encap_content_info.econtent.is_none());
+        let attrs = data
+            .signer_infos
+            .0
+            .get(0)
+            .unwrap()
+            .signed_attrs
+            .as_ref()
+            .unwrap();
+        assert_eq!(attrs.len(), 3);
+        assert!(attrs
+            .iter()
+            .all(|attr| attr.oid != oid("1.2.840.113549.1.9.5")));
+        assert_eq!(
+            verify(&encoded, &fixture.certificate, Some(MESSAGE), true).unwrap(),
+            MESSAGE
+        );
+        assert!(verify(&encoded, &fixture.certificate, Some(b"tampered"), true).is_none());
+    }
+}
+
+#[test]
 fn attached_and_detached_rsa_and_ecdsa_pass_cades_verification() {
     for algorithm in [RSA, EC] {
         let mut fixture = fixture(algorithm);
