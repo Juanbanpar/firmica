@@ -60,7 +60,7 @@ Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and
 
 - **CAdES:** attached or detached CMS signatures. Retain the original bytes when choosing detached.
 - **PAdES:** incremental PDF approval signatures; earlier revisions remain intact. Choose an invisible signature or configure a page, rectangle and one-line ASCII label. Encrypted, certified, locked and XFA PDFs are rejected. Earlier PDF signatures are preserved but not validated.
-- **XAdES:** enveloped UTF-8 XML, or exact binary content embedded inside the signature (enveloping) or alongside it (internally detached). Enveloped signatures cover canonical XML without comments. DTDs, duplicate/reserved IDs, `xml:base` and existing XML signatures are rejected. References and transforms are fixed; no external resources are resolved.
+- **XAdES:** enveloped UTF-8 XML, or exact binary content embedded inside the signature (enveloping) or alongside it (internally detached). Enveloped signatures cover canonical XML without comments; this mode rejects DTDs, duplicate/reserved IDs, `xml:base` and existing XML signatures. References and transforms are fixed; no external resources are resolved.
 
 The encoders use baseline B-B building blocks; no conformance assessment, trusted timestamps, long-term validation evidence or signature policies are provided. Output extensions are `.csig`, `.pdf` and `.xsig` respectively.
 

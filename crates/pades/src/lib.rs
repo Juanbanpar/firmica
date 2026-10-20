@@ -401,7 +401,7 @@ pub fn sign(
     const HEX: &[u8] = b"0123456789ABCDEF";
     for (byte, pair) in cms
         .iter()
-        .zip(output[start + 1..end - 1].chunks_exact_mut(2))
+        .zip(output[start + 1..end - 1].as_chunks_mut::<2>().0)
     {
         pair[0] = HEX[(byte >> 4) as usize];
         pair[1] = HEX[(byte & 15) as usize];

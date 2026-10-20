@@ -5,7 +5,8 @@
 //! signature-policy or revocation claim is made. Enveloped signatures cover the
 //! canonical XML document (comments excluded); other modes cover exact binary
 //! bytes through a base64 transform. Never resolves external entities, files,
-//! URLs, XPath or XSLT. Existing XML signatures and ambiguous IDs are rejected.
+//! URLs, XPath or XSLT. Enveloped input rejects existing XML signatures and
+//! ambiguous IDs; binary placements treat the original bytes as opaque content.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -181,7 +182,7 @@ fn xml_signature(algorithm: SignatureAlgorithm, bytes: &[u8]) -> Result<Vec<u8>,
     }
     let sig = EcSignature::from_der(bytes).map_err(|_| SigningError::InvalidSignature)?;
     let mut raw = vec![0; 64];
-    for (integer, half) in [sig.r, sig.s].into_iter().zip(raw.chunks_exact_mut(32)) {
+    for (integer, half) in [sig.r, sig.s].into_iter().zip(raw.as_chunks_mut::<32>().0) {
         let b = integer.as_bytes();
         if b.len() > 32 || b.iter().all(|b| *b == 0) {
             return Err(SigningError::InvalidSignature.into());

@@ -23,7 +23,7 @@ mod native {
     use der::{Any, Decode, Encode, Sequence};
     use firmica_cades::ContentMode;
     use firmica_certificates::{CertificateError, MAX_PKCS12_BYTES};
-    use firmica_core::signing::CadesReview;
+    use firmica_core::signing::SigningReview;
     use firmica_key_worker::{MAX_PASSWORD_BYTES, MAX_SIGNING_INPUT_BYTES, OPERATION_TIMEOUT};
     use firmica_signing::{SignatureAlgorithm, SigningError, SigningInput, SigningKey};
     use openssl::{
@@ -172,7 +172,7 @@ mod native {
                 .unwrap();
             let mut produced = Vec::new();
             for mode in [ContentMode::Attached, ContentMode::Detached] {
-                let review = CadesReview::prepare(
+                let review = SigningReview::prepare(
                     "synthetic.bin".into(),
                     MESSAGE.to_vec(),
                     &worker,
