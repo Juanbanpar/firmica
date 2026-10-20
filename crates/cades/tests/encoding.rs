@@ -1,3 +1,5 @@
+mod reference;
+
 use cms::{
     content_info::ContentInfo,
     signed_data::{SignedData, SignerIdentifier},
@@ -548,10 +550,9 @@ fn signing_time_switches_at_2050_and_backend_failures_return_no_output() {
 }
 
 #[test]
-#[ignore = "requires Java 17+ and pinned AutoFirma reference jars; run tests/interop/cades_reference.py"]
+#[ignore = "requires Java 17+; downloads checksum-pinned AutoFirma reference jars"]
 fn autofirma_reference_and_spongycastle_verify_shared_semantics() {
-    let classpath =
-        std::env::var("FIRMICA_CADES_REFERENCE_CLASSPATH").expect("reference classpath");
+    let classpath = reference::classpath();
     for algorithm in [RSA, EC] {
         let mut fixture = fixture(algorithm);
         for mode in [ContentMode::Attached, ContentMode::Detached] {
@@ -564,7 +565,8 @@ fn autofirma_reference_and_spongycastle_verify_shared_semantics() {
                 fs::write(temp.path().join("ours.der"), encoded).unwrap();
                 let java = Command::new("java")
                     .current_dir(temp.path())
-                    .args(["-Djava.awt.headless=true", "--class-path", &classpath])
+                    .args(["-Djava.awt.headless=true", "--class-path"])
+                    .arg(&classpath)
                     .arg(
                         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                             .join("tests/CadesReference.java"),

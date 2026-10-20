@@ -32,13 +32,13 @@ dx serve --platform ios
 For Linux document signing, build the application and its companion key worker together from the workspace root:
 
 ```sh
-python3 tools/build-desktop.py build
+cargo xtask build
 ./target/dx/firmica/debug/linux/app/firmica
 # Release application and Debian package:
-python3 tools/build-desktop.py bundle
+cargo xtask bundle
 ```
 
-The builder requires Python 3 and invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install Linux runtime dependencies separately; the Debian package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback.
+The Rust build task invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install Linux runtime dependencies separately; the Debian package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback.
 
 On x64 Windows, install the MSVC build tools, WebView2 Runtime, and a patched shared OpenSSL 3 distribution with x64 import libraries. In PowerShell, set its build paths and build from the workspace root:
 
@@ -46,10 +46,10 @@ On x64 Windows, install the MSVC build tools, WebView2 Runtime, and a patched sh
 $env:OPENSSL_DIR = 'C:\Program Files\OpenSSL'
 $env:OPENSSL_LIB_DIR = "$env:OPENSSL_DIR\lib\VC\x64\MD"
 $env:OPENSSL_STATIC = '0'
-python tools/build-desktop.py build
+cargo xtask build
 .\target\dx\firmica\debug\windows\app\firmica.exe
 # Release portable ZIP:
-python tools/build-desktop.py bundle
+cargo xtask bundle
 ```
 
 The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the distribution's license from `OPENSSL_DIR` beside the application and worker. The ZIP is written under `target/dx/firmica/bundle/windows/`; extract it to a trusted directory and keep its contents together. WebView2 and the MSVC runtime must be installed separately. Update the bundled OpenSSL DLLs when rebuilding with security fixes. Registration is an explicit per-user step using the included `handler.ps1`; extracting the ZIP does not change associations. Windows dialogs use `rfd`; selected documents must be regular files, and file reparse points are rejected. Local signing is unavailable on macOS and mobile.
@@ -153,20 +153,22 @@ The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `db
 
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 
-For native Android invocation checks, build a debug APK with `dx build --locked --package mobile --platform android --target x86_64-linux-android`, then run `python3 tests/interop/android.py --serial emulator-5554 --apk /path/to/app-debug.apk`. The script refuses physical devices. Add `--browser org.mozilla.firefox` to check browser links with Firefox already installed in the emulator.
+For native Android invocation checks, build a debug APK with `dx build --locked --package mobile --platform android --target x86_64-linux-android`, then run `FIRMICA_TEST_APK=/path/to/app-debug.apk ANDROID_SERIAL=emulator-5554 cargo test --locked -p xtask --test android -- --ignored --nocapture`. The test refuses physical devices. Set `FIRMICA_TEST_BROWSER=org.mozilla.firefox` to check browser links with Firefox already installed in the emulator.
 
-On Windows, run `python tests/interop/windows.py --app target/dx/firmica/debug/windows/app/firmica.exe` after the desktop build. It requires OpenSSL and a desktop session, opens the real application, checks warm URI delivery and crash recovery, and saves evidence under `.test-artifacts/windows/`. It uses a temporary TLS identity without changing trust stores or URI associations. This checks command-line invocation; installer and browser handler selection need separate testing.
+On Windows, set `$env:FIRMICA_TEST_APP = 'target/dx/firmica/debug/windows/app/firmica.exe'` and run `cargo test --locked -p xtask --test windows_invocation -- --ignored --nocapture` after the desktop build. It requires OpenSSL and a desktop session, opens the real application, checks warm URI delivery and crash recovery, and saves evidence under `.test-artifacts/windows/`. It uses a temporary TLS identity without changing trust stores or URI associations. This checks command-line invocation; installer and browser handler selection need separate testing.
 
 On macOS with Xcode 16.4 and the iOS 18.5 Simulator runtime, run:
 
 ```sh
 dx build --locked --package mobile --platform ios --target aarch64-apple-ios-sim
-python3 tests/interop/ios.py --app target/dx/mobile/debug/ios/Mobile.app
+FIRMICA_TEST_APP=target/dx/mobile/debug/ios/Mobile.app cargo test --locked -p xtask --test ios -- --ignored --nocapture
 ```
 
-The iOS test creates a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
+The Rust iOS test runs the native Swift XCTest scenario in a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
 
 Dependencies use upstream crates without local patches. The transitive GTK dependencies include accepted unsoundness advisories for [GLib (RUSTSEC-2024-0429)](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) and [rand (RUSTSEC-2026-0097)](https://rustsec.org/advisories/RUSTSEC-2026-0097.html). Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI accepts these two advisories with explicit `--ignore` arguments; other vulnerabilities and unsoundness findings still fail.
+
+Domain logic, protocol, transport, signing, build tooling and OS invocation checks use Cargo tests. JavaScript is limited to browser/WebView automation with Playwright and the upstream AutoScript fixture. Python is limited to Windows GUI automation with Playwright/pywinauto. Swift XCTest exercises Safari and native iOS dialogs. These end-to-end checks complement the Rust tests.
 
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
@@ -174,7 +176,7 @@ The signing libraries can be tested separately from the applications. They requi
 cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11
 cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
 # Java 17+; downloads checksum-pinned, test-only AutoFirma 1.9.1 reference jars:
-python3 tests/interop/cades_reference.py
+cargo test --locked -p firmica-cades --test encoding autofirma_reference -- --ignored --test-threads=1
 # With SoftHSM and softhsm2-util installed; use your platform's module path:
 FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
 ```
@@ -185,7 +187,7 @@ The key-worker library keeps unlocked PKCS#12 keys in a separate Linux or Window
 
 On Windows, build the process-control fixture with `cargo build --locked -p firmica-key-worker --example worker-fixture` before running the worker tests. They check native limit enforcement, blocked pipe deadlines, abandonment, process loss and RSA/P-256 CAdES output independently verified by OpenSSL. The fixture uses synthetic data and never opens a certificate store. After building the desktop application, set `FIRMICA_TEST_WORKER` to the absolute companion executable path and run `cargo test --locked -p desktop -- --ignored --test-threads=1` for the desktop signing and cleanup tests.
 
-For native Windows dialog tests, install `playwright==1.58.0`, `pywinauto==0.6.9` and `Pillow==12.1.0`, then run `python tests/interop/windows-signing.py --app /path/to/firmica.exe`. The test opens real file dialogs, checks consent and cancellation, and verifies RSA/P-256 output with OpenSSL. It enables WebView2 inspection only in its synthetic test process and saves evidence under `.test-artifacts/windows-signing/`. CI runs it against an extracted debug portable bundle (`python tools/build-desktop.py bundle --debug`).
+For native Windows dialog tests, install `playwright==1.58.0`, `pywinauto==0.6.9` and `Pillow==12.1.0`, then run `python tests/interop/windows-signing.py --app /path/to/firmica.exe`. The test opens real file dialogs, checks consent and cancellation, and verifies RSA/P-256 output with OpenSSL. It enables WebView2 inspection only in its synthetic test process and saves evidence under `.test-artifacts/windows-signing/`. CI runs it against an extracted debug portable bundle (`cargo xtask bundle --debug`).
 
 `firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux and Windows desktop signing screens use this review API.
 
