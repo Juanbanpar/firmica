@@ -373,7 +373,7 @@ mod tests {
         );
         let request = ProtocolRequest::parse_websocket(&uri).unwrap();
         assert_eq!(
-            signing::CadesRequest::decode(&request).unwrap().document(),
+            signing::SignRequest::decode(&request).unwrap().document(),
             document
         );
         assert_eq!(

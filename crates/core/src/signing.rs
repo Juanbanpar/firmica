@@ -1,17 +1,15 @@
 //! One-shot approval bound to an owned document and selected certificate identity.
 //!
-//! This API supports standalone CAdES operations. It is not connected to browser
-//! requests or application controls. Preparing a review does not sign anything;
+//! The same review binds CAdES, PAdES or XAdES choices. Preparing does not sign;
 //! applications must display its details and obtain explicit consent before calling
-//! [`CadesReview::approve`]. The type transition records the caller's decision, not
+//! [`SigningReview::approve`]. The type transition records the caller's decision, not
 //! proof of human presence. Low-level signing APIs remain available independently.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use firmica_cades::{
-    ContentMode, SigningOptions, MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CONTENT_BYTES,
-};
+use firmica_cades::{SigningOptions, MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CONTENT_BYTES};
+use firmica_signing::format::Format;
 use firmica_signing::{CertificateIdentity, SignatureAlgorithm, SigningKey};
 use firmica_validation::{
     assess_document_signing, AssessmentError, CertificateAssessment, Restriction,
@@ -25,7 +23,7 @@ pub enum ApprovalError {
     /// A display name is empty, all whitespace or longer than 4096 UTF-8 bytes.
     #[error("invalid document display name")]
     InvalidDocumentName,
-    /// Document size or certificate count/size exceeds the CAdES encoder limits.
+    /// Document size or certificate count/size exceeds the shared encoder limits.
     #[error("signing review exceeds an input limit")]
     InputTooLarge,
     /// The selected leaf cannot be assessed.
@@ -43,27 +41,34 @@ pub enum ApprovalError {
     /// CAdES validation, encoding or the signing provider failed.
     #[error(transparent)]
     Cades(#[from] firmica_cades::CadesError),
+    /// PDF structure, restrictions, encoding or provider failure.
+    #[error(transparent)]
+    Pades(#[from] firmica_pades::PadesError),
+    /// XML structure, canonicalization, encoding or provider failure.
+    #[error(transparent)]
+    Xades(#[from] firmica_xades::XadesError),
 }
 
-/// Immutable review of one owned document, algorithm, content mode and identity.
+/// Immutable review of one owned document, algorithm, format choices and identity.
 ///
 /// Has no signing operation, `Clone` or `Debug`. Drop to cancel. Neither the
 /// document nor certificate identity can be replaced after construction.
-pub struct CadesReview {
+pub struct SigningReview {
     name: String,
     document: Vec<u8>,
     document_hash: [u8; 32],
     identity: CertificateIdentity,
     algorithm: SignatureAlgorithm,
-    mode: ContentMode,
+    format: Format,
     assessment: CertificateAssessment,
 }
 
-impl CadesReview {
+impl SigningReview {
     /// Prepare a review without invoking the private key or accessing files/network.
     ///
     /// Owns the exact bytes to avoid a file changing between review and signing.
-    /// Empty documents are supported. Certificate validity uses the local system
+    /// Empty binary content is supported; PDF/enveloped XML require valid structure.
+    /// Certificate validity uses the local system
     /// clock. The display name is an untrusted label, never a path to open later.
     ///
     /// # Errors
@@ -75,9 +80,9 @@ impl CadesReview {
         document: Vec<u8>,
         key: &dyn SigningKey,
         algorithm: SignatureAlgorithm,
-        mode: ContentMode,
+        format: impl Into<Format>,
     ) -> Result<Self, ApprovalError> {
-        Self::prepare_at(name, document, key, algorithm, mode, SystemTime::now())
+        Self::prepare_at(name, document, key, algorithm, format, SystemTime::now())
     }
 
     fn prepare_at(
@@ -85,7 +90,7 @@ impl CadesReview {
         document: Vec<u8>,
         key: &dyn SigningKey,
         algorithm: SignatureAlgorithm,
-        mode: ContentMode,
+        format: impl Into<Format>,
         now: SystemTime,
     ) -> Result<Self, ApprovalError> {
         if name.len() > 4096 || name.trim().is_empty() {
@@ -102,13 +107,19 @@ impl CadesReview {
         }
         require_capability(key, algorithm)?;
         let assessment = permitted_assessment(&identity.certificate_der, now)?;
+        let format = format.into();
+        match &format {
+            Format::Cades(_) => {}
+            Format::Pades(options) => firmica_pades::preflight(&document, options)?,
+            Format::Xades(mode) => firmica_xades::preflight(&document, *mode)?,
+        }
         Ok(Self {
             name,
             document_hash: Sha256::digest(&document).into(),
             document,
             identity: identity.clone(),
             algorithm,
-            mode,
+            format,
             assessment,
         })
     }
@@ -133,9 +144,9 @@ impl CadesReview {
         self.algorithm
     }
 
-    /// Whether the resulting CAdES embeds the document bytes.
-    pub fn content_mode(&self) -> ContentMode {
-        self.mode
+    /// Fixed format, content placement and appearance to show before approval.
+    pub fn format(&self) -> &Format {
+        &self.format
     }
 
     /// Leaf claims, local restrictions and unperformed trust/revocation checks.
@@ -146,23 +157,23 @@ impl CadesReview {
     /// Record explicit approval of this exact review, consuming the pending state.
     ///
     /// Call only after presenting the document name, size/hash, selected certificate,
-    /// algorithm, content mode and **all unperformed checks**. Local constraints do
+    /// algorithm, format/appearance choices and **all unperformed checks**. Local constraints do
     /// not establish issuer authenticity, chain trust, revocation or qualification;
     /// consent must not describe the certificate as trusted or fully validated.
     /// Approval is neither cloneable nor reusable after an execution attempt.
-    pub fn approve(self) -> ApprovedCades {
-        ApprovedCades(self)
+    pub fn approve(self) -> ApprovedSignature {
+        ApprovedSignature(self)
     }
 }
 
 /// Approval for one execution attempt. Has no `Clone` or `Debug` implementation.
-pub struct ApprovedCades(CadesReview);
+pub struct ApprovedSignature(SigningReview);
 
-impl ApprovedCades {
+impl ApprovedSignature {
     /// Recheck the selected identity, capability and certificate constraints, then sign.
     ///
     /// Consumes approval on success or failure. Uses the local clock immediately
-    /// before encoding; the resulting signing-time attribute is not a trusted time.
+    /// before encoding; the resulting claimed signing time is not trusted time.
     /// The provider must honor the [`SigningKey`] contract, including verification
     /// against its selected certificate. Perform this blocking work off the UI loop.
     ///
@@ -184,15 +195,31 @@ impl ApprovedCades {
         }
         require_capability(key, review.algorithm)?;
         let assessment = permitted_assessment(&review.identity.certificate_der, now)?;
-        Ok(firmica_cades::sign(
-            key,
-            &review.document,
-            SigningOptions {
-                algorithm: review.algorithm,
-                mode: review.mode,
-                signing_time: assessment.assessed_at(),
-            },
-        )?)
+        Ok(match review.format {
+            Format::Cades(mode) => firmica_cades::sign(
+                key,
+                &review.document,
+                SigningOptions {
+                    algorithm: review.algorithm,
+                    mode,
+                    signing_time: assessment.assessed_at(),
+                },
+            )?,
+            Format::Pades(options) => firmica_pades::sign(
+                key,
+                &review.document,
+                review.algorithm,
+                &options,
+                assessment.assessed_at(),
+            )?,
+            Format::Xades(mode) => firmica_xades::sign(
+                key,
+                &review.document,
+                review.algorithm,
+                mode,
+                assessment.assessed_at(),
+            )?,
+        })
     }
 }
 

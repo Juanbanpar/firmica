@@ -1,4 +1,4 @@
-//! Restricted, inline CAdES requests and the unencrypted local WebSocket result.
+//! Restricted inline signing requests and the unencrypted local WebSocket result.
 //!
 //! The wire format follows AutoScript 1.10.1 at clienteafirma revision
 //! `0d7f3cf01fb65d2be5b245622d2c8f490f36e718`. Decoding is not consent.
@@ -9,34 +9,34 @@ use base64::{
     Engine,
 };
 use firmica_cades::ContentMode;
+use firmica_signing::format::{Appearance, Format, PdfOptions, XmlMode};
 use firmica_signing::SignatureAlgorithm;
+use std::collections::BTreeMap;
 use thiserror::Error;
 
-/// Maximum CMS response, including an attached document, worker certificates and signature.
-pub const MAX_CMS_SIGNATURE_BYTES: usize = firmica_cades::MAX_CONTENT_BYTES + 3 * 1024 * 1024;
-/// Maximum encoded certificate-plus-CMS WebSocket response size.
+/// Maximum response signature, including base64 XML content and certificates (26 MiB).
+pub const MAX_SIGNATURE_BYTES: usize = 26 * 1024 * 1024;
+/// Maximum encoded certificate-plus-signature WebSocket response size.
 pub const MAX_SIGN_RESPONSE_BYTES: usize =
-    (64_usize * 1024).div_ceil(3) * 4 + 1 + MAX_CMS_SIGNATURE_BYTES.div_ceil(3) * 4;
+    (64_usize * 1024).div_ceil(3) * 4 + 1 + MAX_SIGNATURE_BYTES.div_ceil(3) * 4;
 
 /// A decoded document and fixed signing choices. No paths, URLs or credentials.
 /// No Debug implementation: document contents must not enter diagnostics.
-pub struct CadesRequest {
+pub struct SignRequest {
     document: Vec<u8>,
     algorithm: SignatureAlgorithm,
-    mode: ContentMode,
+    format: Format,
 }
 
-impl CadesRequest {
-    /// Accepts protocol 4.x `sign`, inline Base64, SHA-256 RSA/P-256 and
-    /// `mode=explicit` (detached, the upstream default) or `mode=implicit`.
+impl SignRequest {
+    /// Accepts protocol 4.x `sign`, inline Base64, SHA-256 RSA/P-256 and the
+    /// documented CAdES/PAdES/XAdES format choices. CAdES defaults to detached;
+    /// XAdES defaults to enveloping, matching the pinned upstream signer.
     /// Unknown fields/properties, sticky certificates, stores other than PKCS12, prehashes,
     /// policies, remote data and other operations are rejected, never ignored.
     /// Session authentication remains the transport's responsibility.
     pub fn decode(request: &ProtocolRequest) -> Result<Self, RequestError> {
-        if request.operation != Operation::Sign
-            || request.version.major != 4
-            || request.parameter("format") != Some("CAdES")
-        {
+        if request.operation != Operation::Sign || request.version.major != 4 {
             return Err(RequestError::Unsupported);
         }
         for key in request.parameters.keys() {
@@ -79,35 +79,10 @@ impl CadesRequest {
             Some("SHA256withECDSA") => SignatureAlgorithm::EcdsaP256Sha256,
             _ => return Err(RequestError::Unsupported),
         };
-        let mut mode = ContentMode::Detached;
-        if let Some(encoded) = request.parameter("properties") {
-            if encoded.len() > 4096 {
-                return Err(RequestError::Invalid);
-            }
-            let bytes = decode(encoded)?;
-            let properties = std::str::from_utf8(&bytes).map_err(|_| RequestError::Invalid)?;
-            let mut seen = false;
-            for line in properties
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                if seen {
-                    return Err(RequestError::Unsupported);
-                }
-                let value = line
-                    .strip_prefix("mode=")
-                    .ok_or(RequestError::Unsupported)?;
-                mode = if value.eq_ignore_ascii_case("explicit") {
-                    ContentMode::Detached
-                } else if value.eq_ignore_ascii_case("implicit") {
-                    ContentMode::Attached
-                } else {
-                    return Err(RequestError::Unsupported);
-                };
-                seen = true;
-            }
-        }
+        let format = decode_format(
+            request.parameter("format"),
+            properties(request.parameter("properties"))?,
+        )?;
         let document = decode(request.parameter("dat").ok_or(RequestError::Invalid)?)?;
         if document.len() > firmica_cades::MAX_CONTENT_BYTES {
             return Err(RequestError::Invalid);
@@ -115,7 +90,7 @@ impl CadesRequest {
         Ok(Self {
             document,
             algorithm,
-            mode,
+            format,
         })
     }
 
@@ -123,9 +98,9 @@ impl CadesRequest {
     pub fn algorithm(&self) -> SignatureAlgorithm {
         self.algorithm
     }
-    /// Whether the exact inline document is embedded in the CMS result.
-    pub fn mode(&self) -> ContentMode {
-        self.mode
+    /// Format, placement and appearance fixed by the request; decoding is not consent.
+    pub fn format(&self) -> &Format {
+        &self.format
     }
     /// Exact inline document, retained for a retry after an incorrect password.
     pub fn document(&self) -> &[u8] {
@@ -135,6 +110,126 @@ impl CadesRequest {
     pub fn into_document(self) -> Vec<u8> {
         self.document
     }
+}
+
+fn properties(encoded: Option<&str>) -> Result<BTreeMap<String, String>, RequestError> {
+    let mut properties = BTreeMap::new();
+    if let Some(encoded) = encoded {
+        if encoded.len() > 4096 {
+            return Err(RequestError::Invalid);
+        }
+        let bytes = decode(encoded)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| RequestError::Invalid)?;
+        for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
+            let (key, value) = line.split_once('=').ok_or(RequestError::Unsupported)?;
+            // Java Properties escapes/continuations are outside this bounded
+            // subset; interpreting them literally would change requested text.
+            if key.contains('\\') || value.contains('\\') {
+                return Err(RequestError::Unsupported);
+            }
+            if properties
+                .insert(key.to_owned(), value.to_owned())
+                .is_some()
+            {
+                return Err(RequestError::Unsupported);
+            }
+        }
+    }
+    Ok(properties)
+}
+
+fn decode_format(
+    name: Option<&str>,
+    mut properties: BTreeMap<String, String>,
+) -> Result<Format, RequestError> {
+    let format = match name {
+        Some("CAdES") => {
+            let mode = match properties.remove("mode") {
+                None => ContentMode::Detached,
+                Some(mode) if mode.eq_ignore_ascii_case("explicit") => ContentMode::Detached,
+                Some(mode) if mode.eq_ignore_ascii_case("implicit") => ContentMode::Attached,
+                _ => return Err(RequestError::Unsupported),
+            };
+            Format::Cades(mode)
+        }
+        Some("PAdES") => {
+            let appearance = if properties.contains_key("signaturePage") {
+                let page = properties
+                    .remove("signaturePage")
+                    .unwrap()
+                    .parse::<u32>()
+                    .map_err(|_| RequestError::Invalid)?;
+                if page == 0 {
+                    return Err(RequestError::Unsupported);
+                }
+                let mut rectangle = [0.; 4];
+                for (coordinate, name) in rectangle.iter_mut().zip([
+                    "signaturePositionOnPageLowerLeftX",
+                    "signaturePositionOnPageLowerLeftY",
+                    "signaturePositionOnPageUpperRightX",
+                    "signaturePositionOnPageUpperRightY",
+                ]) {
+                    *coordinate = properties
+                        .remove(name)
+                        .ok_or(RequestError::Unsupported)?
+                        .parse::<f32>()
+                        .map_err(|_| RequestError::Invalid)?;
+                    if !coordinate.is_finite() {
+                        return Err(RequestError::Invalid);
+                    }
+                }
+                let text = properties
+                    .remove("layer2Text")
+                    .ok_or(RequestError::Unsupported)?;
+                if text.is_empty()
+                    || text.len() > 120
+                    || !text.bytes().all(|b| (32..=126).contains(&b))
+                    || rectangle[0] >= rectangle[2]
+                    || rectangle[1] >= rectangle[3]
+                {
+                    return Err(RequestError::Unsupported);
+                }
+                Some(Appearance {
+                    page,
+                    rectangle,
+                    text,
+                })
+            } else {
+                None
+            };
+            Format::Pades(PdfOptions { appearance })
+        }
+        Some(name @ ("XAdES" | "XAdES Enveloped" | "XAdES Enveloping" | "XAdES Detached")) => {
+            let placement = properties.remove("format");
+            if name != "XAdES" && placement.as_ref().is_some_and(|value| value != name) {
+                return Err(RequestError::Unsupported);
+            }
+            let placement = placement.as_deref().unwrap_or(if name == "XAdES" {
+                "XAdES Enveloping"
+            } else {
+                name
+            });
+            let mode = match placement {
+                "XAdES Enveloped" => XmlMode::Enveloped,
+                "XAdES Enveloping" => XmlMode::Enveloping,
+                "XAdES Detached" => XmlMode::Detached,
+                _ => return Err(RequestError::Unsupported),
+            };
+            // Explicit XML mode can request caller-provided digests upstream.
+            if properties
+                .remove("mode")
+                .is_some_and(|m| !m.eq_ignore_ascii_case("implicit"))
+            {
+                return Err(RequestError::Unsupported);
+            }
+            Format::Xades(mode)
+        }
+        _ => return Err(RequestError::Unsupported),
+    };
+    if !properties.is_empty() {
+        return Err(RequestError::Unsupported);
+    }
+    Ok(format)
 }
 
 fn decode(value: &str) -> Result<Vec<u8>, RequestError> {
@@ -169,7 +264,7 @@ impl SignResponse {
         if certificate.is_empty()
             || certificate.len() > 64 * 1024
             || signature.is_empty()
-            || signature.len() > MAX_CMS_SIGNATURE_BYTES
+            || signature.len() > MAX_SIGNATURE_BYTES
         {
             return Err(RequestError::Invalid);
         }
@@ -194,6 +289,62 @@ impl std::fmt::Debug for SignResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_format_specific_placement_and_pdf_appearance_without_ignoring_options() {
+        for (name, property, expected) in [
+            ("PAdES", "", Format::Pades(PdfOptions::default())),
+            ("XAdES", "", Format::Xades(XmlMode::Enveloping)),
+            (
+                "XAdES",
+                "format=XAdES Enveloped",
+                Format::Xades(XmlMode::Enveloped),
+            ),
+            (
+                "XAdES Detached",
+                "mode=implicit",
+                Format::Xades(XmlMode::Detached),
+            ),
+        ] {
+            let mut request = request("");
+            request.parameters.insert("format".into(), name.into());
+            request
+                .parameters
+                .insert("properties".into(), URL_SAFE.encode(property));
+            assert_eq!(SignRequest::decode(&request).unwrap().format(), &expected);
+        }
+        let properties="signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Reviewed label";
+        let mut req = request("");
+        req.parameters.insert("format".into(), "PAdES".into());
+        req.parameters
+            .insert("properties".into(), URL_SAFE.encode(properties));
+        assert_eq!(
+            SignRequest::decode(&req).unwrap().format(),
+            &Format::Pades(PdfOptions {
+                appearance: Some(Appearance {
+                    page: 1,
+                    rectangle: [40., 30., 400., 70.],
+                    text: "Reviewed label".into()
+                })
+            })
+        );
+        for (name, properties) in [
+            ("PAdES", "signaturePage=1"),
+            ("PAdES", "signaturePage=-1"),
+            ("PAdES", "mode=explicit"),
+            ("PAdES", "policyIdentifier=urn:test"),
+            ("XAdES", "format=XAdES Externally Detached"),
+            ("XAdES", "mode=explicit"),
+            ("XAdES Enveloped", "format=XAdES Detached"),
+            ("XAdES", "xmlTransforms=any"),
+            ("XAdES", "format=XAdES Enveloping\nformat=XAdES Enveloped"),
+        ] {
+            req.parameters.insert("format".into(), name.into());
+            req.parameters
+                .insert("properties".into(), URL_SAFE.encode(properties));
+            assert!(SignRequest::decode(&req).is_err(), "{name}: {properties}");
+        }
+    }
     fn request(extra: &str) -> ProtocolRequest {
         ProtocolRequest::parse(&format!(
             "afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat=AP8%3D{extra}"
@@ -207,20 +358,20 @@ mod tests {
             ("mode=explicit", ContentMode::Detached),
             ("mode=implicit", ContentMode::Attached),
         ] {
-            let parsed = CadesRequest::decode(&request(&format!(
+            let parsed = SignRequest::decode(&request(&format!(
                 "&op=sign&sticky=false&ksb64=UEtDUzEy&properties={}",
                 URL_SAFE.encode(properties)
             )))
             .unwrap();
             assert_eq!(parsed.algorithm(), SignatureAlgorithm::RsaPkcs1v15Sha256);
-            assert_eq!(parsed.mode(), expected);
+            assert_eq!(parsed.format(), &Format::Cades(expected));
             assert_eq!(parsed.into_document(), [0, 255]);
         }
         let mut ec = request("");
         ec.parameters
             .insert("algorithm".into(), "SHA256withECDSA".into());
         assert_eq!(
-            CadesRequest::decode(&ec).unwrap().algorithm(),
+            SignRequest::decode(&ec).unwrap().algorithm(),
             SignatureAlgorithm::EcdsaP256Sha256
         );
     }
@@ -235,7 +386,7 @@ mod tests {
             "&unknown=x",
             "&servicetimeout=1",
         ] {
-            assert!(CadesRequest::decode(&request(extra)).is_err());
+            assert!(SignRequest::decode(&request(extra)).is_err());
         }
         for value in [
             "mode=implicit\nmode=explicit",
@@ -246,7 +397,7 @@ mod tests {
             "mode=explicit\\",
             "mode=explicit\0",
         ] {
-            assert!(CadesRequest::decode(&request(&format!(
+            assert!(SignRequest::decode(&request(&format!(
                 "&properties={}",
                 URL_SAFE.encode(value)
             )))
@@ -256,20 +407,20 @@ mod tests {
             ("dat", "https://example.invalid/document"),
             ("dat", "AP9="),
             ("dat", "AP8"),
-            ("format", "PAdES"),
+            ("format", "PAdEStri"),
             ("algorithm", "SHA1withRSA"),
             ("properties", "_w=="),
         ] {
             let mut parsed = request("");
             parsed.parameters.insert(field.into(), value.into());
-            assert!(CadesRequest::decode(&parsed).is_err());
+            assert!(SignRequest::decode(&parsed).is_err());
         }
         let mut parsed = request("");
         parsed.parameters.remove("dat");
-        assert!(CadesRequest::decode(&parsed).is_err());
+        assert!(SignRequest::decode(&parsed).is_err());
         parsed = request("");
         parsed.version.major = 3;
-        assert!(CadesRequest::decode(&parsed).is_err());
+        assert!(SignRequest::decode(&parsed).is_err());
     }
     #[test]
     fn response_is_url_safe_and_redacted() {
@@ -277,7 +428,7 @@ mod tests {
         assert_eq!(format!("{response:?}"), "SignResponse { .. }");
         assert_eq!(response.into_wire(), "_w==|AP8=");
         assert!(SignResponse::new(&[], &[1]).is_err());
-        assert!(SignResponse::new(&[1], &vec![0; MAX_CMS_SIGNATURE_BYTES + 1]).is_err());
+        assert!(SignResponse::new(&[1], &vec![0; MAX_SIGNATURE_BYTES + 1]).is_err());
     }
 
     #[test]
@@ -288,7 +439,7 @@ mod tests {
         let uri = format!("afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat={encoded}");
         let request = ProtocolRequest::parse_websocket(&uri).unwrap();
         assert!(matches!(
-            CadesRequest::decode(&request),
+            SignRequest::decode(&request),
             Err(RequestError::Invalid)
         ));
     }
@@ -296,7 +447,7 @@ mod tests {
     #[test]
     fn response_bound_includes_both_base64_fields_and_separator() {
         let response =
-            SignResponse::new(&vec![0; 64 * 1024], &vec![0; MAX_CMS_SIGNATURE_BYTES]).unwrap();
+            SignResponse::new(&vec![0; 64 * 1024], &vec![0; MAX_SIGNATURE_BYTES]).unwrap();
         assert_eq!(response.into_wire().len(), MAX_SIGN_RESPONSE_BYTES);
     }
 }

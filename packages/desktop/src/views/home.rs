@@ -18,7 +18,7 @@ pub enum BrowserCompletion {
 #[cfg(any(target_os = "linux", windows))]
 pub struct BrowserOperation {
     generation: u64,
-    pub request: firmica_protocol::signing::CadesRequest,
+    pub request: firmica_protocol::signing::SignRequest,
     pub version: firmica_protocol::ProtocolVersion,
     pub reply: async_channel::Sender<firmica_core::ReviewOutcome>,
 }
@@ -27,7 +27,7 @@ pub struct BrowserOperation {
 #[component]
 pub fn Home() -> Element {
     use firmica_core::{Inbox, ReviewOutcome};
-    use firmica_protocol::signing::{CadesRequest, RequestError};
+    use firmica_protocol::signing::{RequestError, SignRequest};
     let incoming = use_context::<Inbox>();
     // The generic review retains unsupported/direct URI behavior. Only a live
     // transport reply can receive signing output; a bare URI never supplies one.
@@ -51,7 +51,7 @@ pub fn Home() -> Element {
                     if reply.is_closed() {
                         continue;
                     }
-                    match CadesRequest::decode(&incoming.request) {
+                    match SignRequest::decode(&incoming.request) {
                         Ok(request) => {
                             generation = generation.wrapping_add(1);
                             completion.set(None);

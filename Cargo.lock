@@ -1222,6 +1222,7 @@ name = "desktop"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "base64 0.22.1",
  "clap",
  "der",
  "dioxus",
@@ -2113,9 +2114,11 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "firmica-cades",
+ "firmica-pades",
  "firmica-protocol",
  "firmica-signing",
  "firmica-validation",
+ "firmica-xades",
  "sha2 0.10.9",
  "thiserror 2.0.21",
 ]

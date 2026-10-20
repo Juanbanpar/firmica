@@ -42,6 +42,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(windows)'.dev-dependencies]
 tokio = { workspace = true, features = ["process"] }
 
+[target.'cfg(any(target_os = "linux", windows))'.dev-dependencies]
+base64 = "0.22"
+
 [features]
 default = ["desktop"]
 desktop = ["dioxus/desktop"]

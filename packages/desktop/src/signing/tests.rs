@@ -1,4 +1,56 @@
 use super::*;
+use firmica_cades::ContentMode;
+use firmica_signing::format::{Format, PdfOptions, XmlMode};
+
+#[test]
+#[ignore = "requires FIRMICA_TEST_WORKER; run serially against the built companion"]
+fn pdf_and_xml_use_the_controlled_worker_and_cleanup_before_publication() {
+    let pdf = include_bytes!("../../../../crates/pades/tests/fixtures/document.pdf");
+    for algorithm in [RSA, EC] {
+        let temp = tempfile::tempdir().unwrap();
+        fixture(temp.path(), algorithm, false);
+        for (format, document) in [
+            (Format::Pades(PdfOptions::default()), pdf.as_slice()),
+            (Format::Xades(XmlMode::Enveloped), b"<document/>".as_slice()),
+            (Format::Xades(XmlMode::Enveloping), DOCUMENT),
+            (Format::Xades(XmlMode::Detached), DOCUMENT),
+        ] {
+            let before = children();
+            let pending = Prepared::open_document(
+                &worker(),
+                "test".into(),
+                document.to_vec(),
+                &temp.path().join("identity.p12"),
+                SecretString::from(PASSWORD),
+                algorithm,
+                format.clone(),
+            )
+            .unwrap();
+            assert_eq!(pending.review().format(), &format);
+            let response = pending
+                .sign_for_browser(&AtomicBool::new(false))
+                .unwrap()
+                .into_wire();
+            assert_eq!(
+                children(),
+                before,
+                "cleanup must finish before returning any format"
+            );
+            let (_, encoded) = response.split_once('|').unwrap();
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::URL_SAFE
+                .decode(encoded)
+                .unwrap();
+            if matches!(format, Format::Pades(_)) {
+                assert!(bytes.starts_with(pdf));
+            } else {
+                assert!(std::str::from_utf8(&bytes)
+                    .unwrap()
+                    .contains("<ds:SignatureValue>"));
+            }
+        }
+    }
+}
 use firmica_signing::SignatureAlgorithm::{EcdsaP256Sha256 as EC, RsaPkcs1v15Sha256 as RSA};
 use openssl::{
     asn1::{Asn1Integer, Asn1Time},

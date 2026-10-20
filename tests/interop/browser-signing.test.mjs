@@ -17,14 +17,23 @@ const password = 'synthetic-browser-password';
 const smallContent = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls']) {
+for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls']) {
   test(`Firefox AutoScript signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'firmica-browser-signing-'));
     const openssl = args => execFileSync('openssl', args, {cwd:dir, stdio:['ignore','pipe','pipe']});
-    const ec = scenario === 'ec';
+    const ec = scenario === 'ec' || scenario === 'pades-ec' || scenario === 'xades-detached';
+    const pdf = scenario.startsWith('pades-');
+    const xml = scenario.startsWith('xades-');
+    const placement = scenario === 'xades-enveloped' ? 'XAdES Enveloped'
+      : scenario === 'xades-detached' ? 'XAdES Detached' : 'XAdES Enveloping';
+    const format = pdf ? 'PAdES' : xml ? 'XAdES' : 'CAdES';
+    const properties = pdf ? (ec ? 'signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Browser appearance' : '')
+      : xml ? `format=${placement}` : `mode=${ec || scenario === 'large-attached' ? 'implicit' : 'explicit'}`;
     const managed = scenario === 'managed-tls';
     const attached = ec || scenario === 'large-attached';
-    const content = scenario === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
+    const content = pdf ? await readFile(path.join(root,'crates/pades/tests/fixtures/document.pdf'))
+      : scenario === 'xades-enveloped' ? Buffer.from('<document xmlns="urn:firmica:test">Browser XML &amp; content</document>')
+      : scenario === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
       : scenario === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
       : scenario === 'large-detached' ? Buffer.alloc(1024 * 1024, 0xa5) : smallContent;
     const script = await autoscript();
@@ -32,7 +41,7 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detache
       <button id="sign">Sign</button><script src="/autoscript.js"></script><script>
       AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152, 49154); AutoScript.cargarAppAfirma(); AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
       document.querySelector('#sign').onclick = () => AutoScript.sign('${content.toString('base64')}',
-        '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', 'CAdES', 'mode=${attached ? 'implicit' : 'explicit'}',
+        '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', '${format}', ${JSON.stringify(properties)},
         (signature, certificate) => {window.result = {signature, certificate};},
         (type, message, code) => {window.result = {type, message, code};});
       </script></html>`;
@@ -169,6 +178,8 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detache
       const signer = openssl(['x509','-in','signer.pem','-outform','DER']);
       assert.equal(await native.evaluate('document.querySelector("#sign-document-hash").textContent'),sha256(content));
       assert.equal(await native.evaluate('document.querySelector("#sign-fingerprint").textContent'),sha256(signer));
+      assert.match(await native.evaluate('document.querySelector("#sign-review-format").textContent'),new RegExp(`^${format}`));
+      if (scenario === 'pades-ec') assert.match(await native.evaluate('document.querySelector("#sign-review-appearance").textContent'),/Browser appearance/);
       assert.equal(await native.evaluate('document.querySelector("#sign-save").disabled'),true,'explicit acknowledgement is required');
       assert.equal((await workers()).length,1);
       if (process.env.FIRMICA_SCREENSHOT && scenario === 'rsa') {
@@ -203,10 +214,26 @@ for (const scenario of ['rsa', 'ec', 'worker-failure', 'unmount', 'large-detache
       } else {
         assert.equal(result.type,undefined);
         assert.deepEqual(Buffer.from(result.certificate,'base64'),signer,'response certificate must be the reviewed leaf');
-        await writeFile(path.join(dir,'result.csig'),Buffer.from(result.signature,'base64'));
-        openssl(['cms','-verify','-cades','-binary','-inform','DER','-in','result.csig','-CAfile','signer.pem',
+        const signed=Buffer.from(result.signature,'base64');
+        if (pdf) {
+          assert.ok(signed.subarray(0,content.length).equals(content),'original PDF revision must remain intact');
+          await writeFile(path.join(dir,'result.pdf'),signed);
+          const verification=execFileSync('pdfsig',['-nocert','result.pdf'],{cwd:dir,encoding:'utf8'});
+          assert.match(verification,/Signature is Valid/);
+        } else if (xml) {
+          await writeFile(path.join(dir,'result.xml'),signed);
+          execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','signer.pem','--enabled-reference-uris','empty,same-doc',
+            '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties','--id-attr:Id','http://www.w3.org/2000/09/xmldsig#:Object','result.xml'],{cwd:dir,stdio:['ignore','pipe','pipe']});
+          if (scenario !== 'xades-enveloped') {
+            const data=await page.evaluate(text=>new DOMParser().parseFromString(text,'application/xml').querySelector('[Id="Firmica-Content"]').textContent,signed.toString());
+            assert.deepEqual(Buffer.from(data,'base64'),content);
+          } else assert.ok(signed.toString().includes('Browser XML &amp; content'));
+        } else {
+          await writeFile(path.join(dir,'result.csig'),signed);
+          openssl(['cms','-verify','-cades','-binary','-inform','DER','-in','result.csig','-CAfile','signer.pem',
           '-no-CApath','-no-CAstore','-partial_chain','-purpose','any',...(!attached ? ['-content','reference.bin'] : []),'-out','verified.bin']);
-        assert.deepEqual(await readFile(path.join(dir,'verified.bin')),content);
+          assert.deepEqual(await readFile(path.join(dir,'verified.bin')),content);
+        }
         await until(async () => (await native.evaluate('document.querySelector("#browser-status")?.textContent'))?.includes('Signature prepared'));
       }
       if (scenario.startsWith('large-')) {

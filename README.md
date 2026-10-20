@@ -2,7 +2,7 @@
 
 Rust electronic-signature client using Dioxus 0.7.10 and Tailwind CSS 4, targeting existing AutoFirma browser integrations.
 
-The Linux and Windows desktop applications sign local documents and supported AutoScript requests in CAdES format using PKCS#12 certificates. Browser signing requires local TLS setup, browser trust and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
+The Linux and Windows desktop applications sign local documents and supported AutoScript requests in CAdES, PAdES and XAdES formats using PKCS#12 certificates. Browser signing requires local TLS setup, browser trust and certificate review. Bare `afirma://sign` invocations support review and cancellation only. Certificate trust, revocation and legal qualification are not validated.
 
 ## Build
 
@@ -56,7 +56,13 @@ The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the dis
 
 ## Local signing
 
-Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and enter its password. Choose RSA PKCS#1 v1.5/SHA-256 or ECDSA P-256/SHA-256 and whether to embed the document. RSA keys must have at least 2048 bits. Documents are limited to 16 MiB and containers to 8 MiB. Empty documents and empty passwords are supported.
+Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and enter its password. Choose a format and RSA PKCS#1 v1.5/SHA-256 or ECDSA P-256/SHA-256. RSA keys must have at least 2048 bits. Documents are limited to 16 MiB and containers to 8 MiB. Empty binary documents and empty passwords are supported.
+
+- **CAdES:** attached or detached CMS signatures. Retain the original bytes when choosing detached.
+- **PAdES:** incremental PDF approval signatures; earlier revisions remain intact. Choose an invisible signature or configure a page, rectangle and one-line ASCII label. Encrypted, certified, locked and XFA PDFs are rejected. Earlier PDF signatures are preserved but not validated.
+- **XAdES:** enveloped UTF-8 XML, or exact binary content embedded inside the signature (enveloping) or alongside it (internally detached). Enveloped signatures cover canonical XML without comments. DTDs, duplicate/reserved IDs, `xml:base` and existing XML signatures are rejected. References and transforms are fixed; no external resources are resolved.
+
+The encoders use baseline B-B building blocks; no conformance assessment, trusted timestamps, long-term validation evidence or signature policies are provided. Output extensions are `.csig`, `.pdf` and `.xsig` respectively.
 
 **Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog; cancelling it preserves the review. **Cancel** closes the certificate worker without signing.
 
@@ -109,11 +115,19 @@ Explicit TLS settings override the per-user profile. Supply all three options to
   'afirma://websocket?v=4&jvc=4&ports=49152,49153,49154&idsession=0123456789abcdef'
 ```
 
-On Linux, protocol 4.x WSS `sign` requests can return a signature after certificate selection and explicit approval. Supported requests contain an inline Base64 document, `format=CAdES`, and `algorithm=SHA256withRSA` or `SHA256withECDSA` (P-256 only). The only supported extra property is `mode=explicit` (detached, also the default) or `mode=implicit` (attached). WebSocket documents may contain up to 16 MiB of decoded data. The encoded request is bounded by the Base64 size of that document plus 64 KiB of metadata; other parameters together remain limited to 64 KiB. Native OS invocations and control messages retain the 64 KiB limit. Only PKCS#12 selection is supported; a request may omit the store or specify `ksb64` encoding `PKCS12`. Firefox’s AutoScript default requests its Mozilla store, so a PKCS#12 integration must call `AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12)`. Sticky certificate reuse, other certificate stores, remote document URLs, precomputed digests, signature policies and unknown options are unsupported. Other operations retain review/cancellation behavior.
+On Linux and Windows, protocol 4.x WSS `sign` requests can return a signature after certificate selection and explicit approval. Supported requests contain an inline Base64 document and `algorithm=SHA256withRSA` or `SHA256withECDSA` (P-256 only). WebSocket documents may contain up to 16 MiB of decoded data. The encoded request is bounded by the Base64 size of that document plus 64 KiB of metadata; other parameters together remain limited to 64 KiB. Native OS invocations and control messages retain the 64 KiB limit. Only PKCS#12 selection is supported; a request may omit the store or specify `ksb64` encoding `PKCS12`. Firefox’s AutoScript default requests its Mozilla store, so a PKCS#12 integration must call `AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12)`. Sticky certificate reuse, other certificate stores, remote document URLs, precomputed digests, signature policies and unknown options are unsupported. Other operations retain review/cancellation behavior.
 
-The signing screen fixes the document and signing choices from the request, shows their hash and the selected certificate, and warns that the request origin is unauthenticated. **Sign and send to browser** returns the reviewed certificate and CMS result to that session after worker cleanup; no destination file is written. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
+The signing screen fixes the document and signing choices from the request, shows their hash and the selected certificate, and warns that the request origin is unauthenticated. **Sign and send to browser** returns the reviewed certificate and signed result to that session after worker cleanup; no destination file is written. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
 
 Do not install test certificates globally. Chromium tests pin one ephemeral public key. The Firefox OS-handler test provisions TLS with `firmica tls init`, trusts its CA only in a disposable profile and checks that a fresh profile rejects it. Tests use an isolated XDG association without replacing the user's default handler.
+
+Supported format properties are deliberately limited:
+
+| Request format | Extra properties |
+| --- | --- |
+| `CAdES` | `mode=explicit` (detached, default) or `mode=implicit` (attached) |
+| `PAdES` | Invisible by default. A visible appearance requires `signaturePage` (positive, one-based), all four coordinates (`signaturePositionOnPageLowerLeftX`, `signaturePositionOnPageLowerLeftY`, `signaturePositionOnPageUpperRightX`, `signaturePositionOnPageUpperRightY`) and `layer2Text` (printable ASCII, at most 120 characters). The rectangle must fit the page. |
+| `XAdES` | `format=XAdES Enveloped`, `XAdES Enveloping` (default) or `XAdES Detached`. These names are also accepted as the request format. Optional `mode=implicit`; explicit/prehashed XML mode is rejected. |
 
 ## Verify
 
@@ -149,7 +163,7 @@ FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run t
 npm run test:lifecycle
 ```
 
-The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify RSA/P-256 output with OpenSSL, and check that worker failure and navigation cancellation return no signature. They include 1 MiB detached and 16 MiB attached documents, reject oversized documents before opening a key, and sign using an automatically loaded TLS profile. Provisioning tests check permissions, symlinks, concurrent setup, mismatched keys, expiry and certificate constraints. Transport tests require the OpenSSL CLI and exercise whole/fragmented messages, session authentication and size limits over ephemeral TLS connections.
+The signing window tests additionally need `zenity`, `openbox`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify CAdES with OpenSSL, PAdES with Poppler and XAdES with XMLSec, and check that worker failure and navigation cancellation return no signature. They include 1 MiB detached and 16 MiB attached documents, reject oversized documents before opening a key, and sign using an automatically loaded TLS profile. Provisioning tests check permissions, symlinks, concurrent setup, mismatched keys, expiry and certificate constraints. Transport tests require the OpenSSL CLI and exercise whole/fragmented messages, session authentication and size limits over ephemeral TLS connections.
 
 The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
 
@@ -173,10 +187,13 @@ Domain logic, protocol, transport, signing, build tooling and OS invocation chec
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
 ```sh
-cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11
-cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
+cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11
+cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
 # Java 17+; downloads checksum-pinned, test-only AutoFirma 1.9.1 reference jars:
 cargo test --locked -p firmica-cades --test encoding autofirma_reference -- --ignored --test-threads=1
+# Poppler and XMLSec (OpenSSL backend) independently verify PDF/XML output:
+cargo test --locked -p firmica-pades --test encoding poppler_ -- --ignored
+cargo test --locked -p firmica-xades --test encoding xmlsec_ -- --ignored
 # With SoftHSM and softhsm2-util installed; use your platform's module path:
 FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
 ```
@@ -189,7 +206,7 @@ On Windows, build the process-control fixture with `cargo build --locked -p firm
 
 For native Windows dialog tests, install `playwright==1.58.0`, `pywinauto==0.6.9` and `Pillow==12.1.0`, then run `python tests/interop/windows-signing.py --app /path/to/firmica.exe`. The test opens real file dialogs, checks consent and cancellation, and verifies RSA/P-256 output with OpenSSL. It enables WebView2 inspection only in its synthetic test process and saves evidence under `.test-artifacts/windows-signing/`. CI runs it against an extracted debug portable bundle (`cargo xtask bundle --debug`).
 
-`firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core CAdES review API binds approval to the selected document bytes, certificate identity, algorithm and content mode, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux and Windows desktop signing screens use this review API.
+`firmica-validation` checks local leaf-certificate restrictions for document signing: validity, key usage, extended key usage, CA usage and private-key usage periods. It rejects unhandled critical extensions and malformed constraints. It does not verify certificate signatures, chain trust, revocation or legal qualification. The core signing review API binds approval to the selected document bytes, certificate identity, algorithm and format choices, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux and Windows desktop signing screens use this review API.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
 

@@ -95,12 +95,18 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
           await until(async () => await evaluate(`document.querySelector(${JSON.stringify(selector)}).files[0]?.name === ${JSON.stringify(filename)}`));
         }
       }
-      async function select(algorithm, attached=false, secret=password) {
-        await writeFile(path.join(dir, 'document.bin'), content);
+      async function select(algorithm, attached=false, secret=password, format='cades', document=content, visible=false) {
+        await writeFile(path.join(dir, 'document.bin'), document);
         await dialog('#sign-document', path.join(dir, 'document.bin'));
         await dialog('#sign-certificate', path.join(dir, `${algorithm}.p12`));
         await input('#sign-password', secret);
         await input('#sign-algorithm', algorithm, 'change');
+        await input('#sign-format', format, 'change');
+        if (format === 'cades') await until(async () => await evaluate('document.querySelector("#sign-attached")?.checked === false'));
+        if (visible) {
+          await until(async () => await evaluate('!!document.querySelector("#sign-visible")'));
+          await click('#sign-visible');
+        }
         if (attached) await click('#sign-attached');
         await until(async () => !(await evaluate('document.querySelector("#sign-prepare").disabled')));
         await click('#sign-prepare');
@@ -144,6 +150,23 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
           ...(!attached ? ['-content', 'reference.bin'] : []), '-out', 'verified.bin']);
         assert.deepEqual(await readFile(path.join(dir, 'verified.bin')), content);
       }
+      const pdf=await readFile(path.join(root,'crates/pades/tests/fixtures/document.pdf'));
+      for (const [format, document, extension] of [['pades',pdf,'pdf'],['enveloped',Buffer.from('<document>Local XML</document>'),'xsig']]) {
+        await select('rsa',false,password,format,document,format==='pades');
+        await until(async () => await evaluate('!!document.querySelector("#sign-subject")'));
+        assert.equal(await evaluate('document.querySelector("#sign-document-hash").textContent'),sha256(document));
+        assert.match(await evaluate('document.querySelector("#sign-review-format").textContent'),format==='pades' ? /^PAdES/ : /^XAdES/);
+        if (format==='pades') assert.match(await evaluate('document.querySelector("#sign-review-appearance").textContent'),/Signed with Firmica/);
+        await click('#sign-acknowledge');
+        await dialog('#sign-save',path.join(output,`result.${extension}`));
+        await until(async () => (await status()) === 'Signature saved.');
+        assert.equal((await workers()).length,0);
+        if (format==='pades') {
+          assert.ok((await readFile(path.join(output,'result.pdf'))).subarray(0,pdf.length).equals(pdf));
+          assert.match(execFileSync('pdfsig',['-nocert',path.join(output,'result.pdf')],{encoding:'utf8'}),/Signature is Valid/);
+        } else execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','rsa.pem','--enabled-reference-uris','empty,same-doc',
+          '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties',path.join(output,'result.xsig')],{cwd:dir,stdio:['ignore','pipe','pipe']});
+      }
       await select('ec');
       await until(async () => await evaluate('!!document.querySelector("#sign-subject")'));
       if (process.env.FIRMICA_SCREENSHOT) {
@@ -156,7 +179,7 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
       await until(async () => (await workers()).length === 0);
       assert(!stderr.includes(password));
       assert(!stderr.includes('BEGIN PRIVATE KEY'));
-      console.log(`Verified ${deb ? 'packaged' : 'built'} desktop signing: native selection, wrong-password cleanup, explicit consent, browser isolation, cancellation, frozen bytes, RSA/P-256 CAdES, worker exit, unmount cleanup.`);
+      console.log(`Verified ${deb ? 'packaged' : 'built'} desktop signing: native selection, wrong-password cleanup, explicit consent, browser isolation, cancellation, frozen bytes, CAdES, visible PAdES, XAdES, worker exit, unmount cleanup.`);
     } catch (error) {
       if (xenv && process.env.FIRMICA_SCREENSHOT) {
         execFileSync('import', ['-window', 'root', process.env.FIRMICA_SCREENSHOT], {env:xenv});

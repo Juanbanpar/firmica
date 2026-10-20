@@ -1,11 +1,15 @@
 //! Blocking local workflow. All calls that read files, import, sign or close a key
 //! run outside the UI loop. Browser data must first pass operation-specific decoding.
 
-use firmica_cades::{ContentMode, MAX_CONTENT_BYTES};
-use firmica_core::signing::{ApprovalError, CadesReview};
+use firmica_cades::MAX_CONTENT_BYTES;
+use firmica_core::signing::{ApprovalError, SigningReview};
 use firmica_key_worker::{WorkerError, WorkerKey};
 use firmica_protocol::signing::SignResponse;
-use firmica_signing::{SignatureAlgorithm, SigningKey};
+use firmica_signing::format::Format;
+use firmica_signing::{
+    CertificateIdentity, Signature, SignatureAlgorithm, SigningCapability, SigningError,
+    SigningInput, SigningKey,
+};
 use secrecy::{ExposeSecretMut, SecretBox, SecretString};
 use std::{
     io::{Read, Write},
@@ -79,7 +83,7 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
 /// Opaque, single-use imported key and frozen review. No Clone/Debug implementation.
 pub struct Prepared {
     worker: Option<WorkerKey>,
-    review: Option<CadesReview>,
+    review: Option<SigningReview>,
 }
 
 impl Prepared {
@@ -89,7 +93,7 @@ impl Prepared {
         container: &Path,
         password: SecretString,
         algorithm: SignatureAlgorithm,
-        mode: ContentMode,
+        format: impl Into<Format>,
     ) -> Result<Self, Error> {
         let mut content = read_bounded(document, MAX_CONTENT_BYTES)?;
         let name = document
@@ -99,7 +103,7 @@ impl Prepared {
             .into_owned();
         let document = std::mem::take(content.expose_secret_mut());
         Self::open_document(
-            executable, name, document, container, password, algorithm, mode,
+            executable, name, document, container, password, algorithm, format,
         )
     }
 
@@ -112,14 +116,14 @@ impl Prepared {
         container: &Path,
         password: SecretString,
         algorithm: SignatureAlgorithm,
-        mode: ContentMode,
+        format: impl Into<Format>,
     ) -> Result<Self, Error> {
         if document.len() > MAX_CONTENT_BYTES {
             return Err(Error::InputTooLarge);
         }
         let container = read_bounded(container, MAX_CONTAINER_BYTES)?;
         let key = WorkerKey::import(executable, container, password).map_err(Error::Worker)?;
-        match CadesReview::prepare(name, document, &key, algorithm, mode) {
+        match SigningReview::prepare(name, document, &key, algorithm, format) {
             Ok(review) => Ok(Self {
                 worker: Some(key),
                 review: Some(review),
@@ -131,7 +135,7 @@ impl Prepared {
         }
     }
 
-    pub fn review(&self) -> &CadesReview {
+    pub fn review(&self) -> &SigningReview {
         self.review.as_ref().expect("live review")
     }
 
@@ -178,7 +182,10 @@ impl Prepared {
                 .take()
                 .expect("live review")
                 .approve()
-                .sign(&mut worker)
+                .sign(&mut CancellableKey {
+                    key: &mut worker,
+                    cancelled,
+                })
                 .map_err(Error::Approval)
         };
         worker.close().map_err(Error::Worker)?;
@@ -187,6 +194,31 @@ impl Prepared {
             return Err(Error::Cancelled);
         }
         Ok((certificate, signature))
+    }
+}
+
+// Format parsing may take time after approval. Recheck cancellation immediately
+// before the private-key operation, as well as before/after the whole workflow.
+struct CancellableKey<'a> {
+    key: &'a mut WorkerKey,
+    cancelled: &'a AtomicBool,
+}
+impl SigningKey for CancellableKey<'_> {
+    fn identity(&self) -> &CertificateIdentity {
+        self.key.identity()
+    }
+    fn capabilities(&self) -> &[SigningCapability] {
+        self.key.capabilities()
+    }
+    fn sign(
+        &mut self,
+        algorithm: SignatureAlgorithm,
+        input: SigningInput<'_>,
+    ) -> Result<Signature, SigningError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(SigningError::BackendFailure);
+        }
+        self.key.sign(algorithm, input)
     }
 }
 

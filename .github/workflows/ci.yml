@@ -22,7 +22,7 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - name: Install Linux signing test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2 poppler-utils xmlsec1
       - name: Verify native test tooling
         run: openssl version
       - name: Configure Windows system OpenSSL
@@ -40,7 +40,12 @@ jobs:
       - name: Build Windows worker control fixture
         if: runner.os == 'Windows'
         run: cargo +stable build --locked -p firmica-key-worker --example worker-fixture
-      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11
+      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11
+      - name: Independently verify PDF revisions and XML signatures
+        if: runner.os == 'Linux'
+        run: |
+          cargo +stable test --locked -p firmica-pades --test encoding poppler_ -- --ignored
+          cargo +stable test --locked -p firmica-xades --test encoding xmlsec_ -- --ignored
       - name: Compare CAdES with AutoFirma and verify with SpongyCastle
         if: runner.os == 'Linux'
         run: cargo +stable test --locked -p firmica-cades --test encoding autofirma_reference -- --ignored --test-threads=1
@@ -51,8 +56,8 @@ jobs:
           module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
           test -n "$module"
           FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
-      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11 --all-targets -- -D warnings
-      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
+      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --all-targets -- -D warnings
+      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
 
   rust:
     strategy:
@@ -154,7 +159,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool zenity openbox xclip desktop-file-utils libnss3-tools dbus-daemon
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool zenity openbox xclip desktop-file-utils libnss3-tools dbus-daemon poppler-utils xmlsec1
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Install verified Dioxus CLI 0.7.10

@@ -5,6 +5,7 @@ use firmica_cades::ContentMode;
 use firmica_core::signing::ApprovalError;
 use firmica_core::ReviewOutcome;
 use firmica_key_worker::WorkerError;
+use firmica_signing::format::{Appearance, Format, PdfOptions, XmlMode};
 use firmica_signing::SignatureAlgorithm;
 use firmica_validation::Restriction;
 use secrecy::SecretString;
@@ -48,7 +49,7 @@ struct Details {
     start: String,
     end: String,
     chosen_algorithm: SignatureAlgorithm,
-    mode: ContentMode,
+    format: Format,
 }
 
 #[component]
@@ -62,7 +63,7 @@ pub fn LocalSigning(
     let mut password = use_signal(SecretString::default);
     let mut password_generation = use_signal(|| 0_u64);
     let mut algorithm = use_signal(|| SignatureAlgorithm::RsaPkcs1v15Sha256);
-    let mut attached = use_signal(|| false);
+    let mut format = use_signal(|| Format::Cades(ContentMode::Detached));
     let mut prepared = use_signal(|| None::<Prepared>);
     let mut busy = use_signal(|| false);
     let mut acknowledged = use_signal(|| false);
@@ -116,7 +117,7 @@ pub fn LocalSigning(
             start: date(certificate.not_before()),
             end: date(certificate.not_after()),
             chosen_algorithm: review.algorithm(),
-            mode: review.content_mode(),
+            format: review.format().clone(),
         }
     });
     let text = match &*status.read() {
@@ -183,10 +184,10 @@ pub fn LocalSigning(
                     }, {tr(spanish, "Rechazar", "Reject")} }
                 }
             } else {
-                p { class: "mb-6", {tr(spanish, "Firma local CAdES. Las solicitudes del navegador no autorizan esta operación.", "Local CAdES signing. Browser requests do not authorize this operation.")} }
+                p { class: "mb-6", {tr(spanish, "Firma local. Revisa el documento y el certificado antes de autorizar la operación.", "Local signing. Review the document and certificate before authorizing the operation.")} }
             }
             p { id: "sign-status", class: "mb-6", role: if failed { "alert" } else { "status" }, "{text}" }
-            if let Some(Details { name, size, hash, subject, issuer, serial, fingerprint, start, end, chosen_algorithm, mode }) = details {
+            if let Some(Details { name, size, hash, subject, issuer, serial, fingerprint, start, end, chosen_algorithm, format }) = details {
                 section { aria_label: tr(spanish, "Revisión de firma", "Signing review"),
                     dl { class: "grid grid-cols-1 gap-2 break-all sm:grid-cols-[10rem_1fr]",
                         dt { {tr(spanish, "Documento", "Document")} } dd { id: "sign-document-name", "{name}" }
@@ -199,10 +200,18 @@ pub fn LocalSigning(
                         dt { {tr(spanish, "Válido desde", "Valid from")} } dd { "{start}" }
                         dt { {tr(spanish, "Válido hasta", "Valid until")} } dd { "{end}" }
                         dt { {tr(spanish, "Algoritmo", "Algorithm")} } dd { {algorithm_name(chosen_algorithm)} }
-                        dt { {tr(spanish, "Contenido", "Content")} } dd {
-                            if mode == ContentMode::Attached { {tr(spanish, "Incluido en la firma", "Embedded in the signature")} }
-                            else { {tr(spanish, "Separado; conserva el documento original", "Detached; retain the original document")} }
+                        dt { {tr(spanish, "Formato", "Format")} } dd { id: "sign-review-format", "{format.label()}" }
+                        if let Format::Pades(options) = &format {
+                            dt { {tr(spanish, "Apariencia", "Appearance")} }
+                            dd { id: "sign-review-appearance",
+                                if let Some(appearance) = &options.appearance {
+                                    "{appearance.text} — {appearance.page}: {appearance.rectangle:?}"
+                                } else { {tr(spanish, "Invisible", "Invisible")} }
+                            }
                         }
+                    }
+                    if format == Format::Xades(XmlMode::Enveloped) {
+                        p { class: "mt-4 text-sm", {tr(spanish, "Se firma el XML canónico; los comentarios no quedan firmados.", "The signature covers canonical XML; comments are not signed.")} }
                     }
                     p { class: "my-6", id: "sign-unchecked", role: "alert",
                         {tr(spanish,
@@ -242,8 +251,11 @@ pub fn LocalSigning(
                                         busy.set(false);
                                         return;
                                     }
-                                    let filename = prepared.peek().as_ref().map(|pending| format!("{}.csig", pending.review().document_name())).unwrap_or_else(|| "signature.csig".into());
-                                    let destination = file_dialog().set_file_name(filename).add_filter("CAdES", &["csig"]).save_file().await;
+                                    let (filename, extension) = prepared.peek().as_ref().map(|pending| {
+                                        let review = pending.review(); let extension = review.format().extension();
+                                        (format!("{}.signed.{extension}", review.document_name()), extension)
+                                    }).unwrap_or_else(|| ("signature.csig".into(), "csig"));
+                                    let destination = file_dialog().set_file_name(filename).add_filter("Signature", &[extension]).save_file().await;
                                     if let Some(destination) = destination {
                                         let pending = prepared.write().take();
                                         if let Some(pending) = pending {
@@ -306,9 +318,51 @@ pub fn LocalSigning(
                             option { value: "ec", "ECDSA P-256 / SHA-256" }
                         }
                     }
-                    label { class: "flex items-center gap-3",
-                        input { id: "sign-attached", r#type: "checkbox", checked: attached(), disabled: busy(), onchange: move |event| attached.set(event.checked()) }
-                        {tr(spanish, "Incluir el documento en la firma", "Embed the document in the signature")}
+                    label { class: "block", {tr(spanish, "Formato", "Format")}
+                        select { id: "sign-format", class: FIELD, disabled: busy(), value: format_value(&format()),
+                            onchange: move |event| format.set(match event.value().as_str() {
+                                "pades" => Format::Pades(PdfOptions::default()),
+                                "enveloped" => Format::Xades(XmlMode::Enveloped),
+                                "enveloping" => Format::Xades(XmlMode::Enveloping),
+                                "detached" => Format::Xades(XmlMode::Detached),
+                                _ => Format::Cades(ContentMode::Detached),
+                            }),
+                            option { value: "cades", "CAdES" }
+                            option { value: "pades", "PAdES" }
+                            option { value: "enveloped", "XAdES (enveloped)" }
+                            option { value: "enveloping", "XAdES (enveloping)" }
+                            option { value: "detached", "XAdES (internally detached)" }
+                        }
+                    }
+                    if let Format::Cades(mode) = format() {
+                        label { class: "flex items-center gap-3",
+                            input { id: "sign-attached", r#type: "checkbox", checked: mode == ContentMode::Attached, disabled: busy(),
+                                onchange: move |event| format.set(Format::Cades(if event.checked() {ContentMode::Attached} else {ContentMode::Detached})) }
+                            {tr(spanish, "Incluir el documento en la firma", "Embed the document in the signature")}
+                        }
+                    }
+                    if let Format::Pades(options) = format() {
+                        label { class: "flex items-center gap-3",
+                            input { id: "sign-visible", r#type: "checkbox", checked: options.appearance.is_some(), disabled: busy(),
+                                onchange: move |event| format.set(Format::Pades(PdfOptions{appearance:event.checked().then(||Appearance{page:1,rectangle:[40.,30.,400.,70.],text:"Signed with Firmica".into()})})) }
+                            {tr(spanish, "Firma visible", "Visible signature")}
+                        }
+                        if let Some(appearance) = options.appearance.clone() {
+                            label { class: "block", {tr(spanish, "Texto (ASCII)", "Text (ASCII)")}
+                                input { class: FIELD, value: appearance.text, maxlength: "120", disabled: busy(),
+                                    oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.text=event.value();}} } }
+                            }
+                            label { class: "block", {tr(spanish, "Página", "Page")}
+                                input { class: FIELD, r#type: "number", min: "1", value: appearance.page, disabled: busy(),
+                                    oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.page=event.value().parse().unwrap_or(0);}} } }
+                            }
+                            for (index, label) in ["x1", "y1", "x2", "y2"].into_iter().enumerate() {
+                                label { class: "block", "{label} (pt)"
+                                    input { class: FIELD, r#type: "number", step: "any", value: appearance.rectangle[index], disabled: busy(),
+                                        oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.rectangle[index]=event.value().parse().unwrap_or(f32::NAN);}} } }
+                                }
+                            }
+                        }
                     }
                     }
                     button { id: "sign-prepare", class: BUTTON, disabled: busy() || (!external && document.read().is_none()) || certificate.read().is_none(),
@@ -317,22 +371,22 @@ pub fn LocalSigning(
                             let Some(certificate_path) = certificate.peek().clone() else { return; };
                             let document_path = document.peek().clone();
                             let inline = browser.and_then(|browser| browser.peek().as_ref().filter(|operation| !operation.reply.is_closed()).map(|operation| (
-                                operation.request.document().to_vec(), operation.request.algorithm(), operation.request.mode()
+                                operation.request.document().to_vec(), operation.request.algorithm(), operation.request.format().clone()
                             )));
                             if external && inline.is_none() { return; }
                             let secret = std::mem::take(&mut *password.write());
                             *password_generation.write() += 1;
                             let algorithm = algorithm();
-                            let mode = if attached() { ContentMode::Attached } else { ContentMode::Detached };
+                            let format = format();
                             busy.set(true);
                             status.set(Status::Opening);
                             spawn(async move {
                                 let result = tokio::task::spawn_blocking(move || {
                                     let worker = packaged_worker()?;
-                                    if let Some((document, algorithm, mode)) = inline {
-                                        Prepared::open_document(&worker, "Browser document / Documento del navegador".into(), document, &certificate_path, secret, algorithm, mode)
+                                    if let Some((document, algorithm, format)) = inline {
+                                        Prepared::open_document(&worker, "Browser document / Documento del navegador".into(), document, &certificate_path, secret, algorithm, format)
                                     } else {
-                                        Prepared::open(&worker, &document_path.ok_or(Error::ReadInput)?, &certificate_path, secret, algorithm, mode)
+                                        Prepared::open(&worker, &document_path.ok_or(Error::ReadInput)?, &certificate_path, secret, algorithm, format)
                                     }
                                 }).await.unwrap_or(Err(Error::Task));
                                 match result {
@@ -349,6 +403,16 @@ pub fn LocalSigning(
                 }
             }
         }
+    }
+}
+
+fn format_value(format: &Format) -> &'static str {
+    match format {
+        Format::Cades(_) => "cades",
+        Format::Pades(_) => "pades",
+        Format::Xades(XmlMode::Enveloped) => "enveloped",
+        Format::Xades(XmlMode::Enveloping) => "enveloping",
+        Format::Xades(XmlMode::Detached) => "detached",
     }
 }
 
@@ -430,6 +494,8 @@ fn error_text(error: &Error, es: bool) -> String {
             return format!("{} {}", tr(es, "Firma bloqueada:", "Signing blocked:"), restrictions.iter().map(|restriction| restriction_text(*restriction, es)).collect::<Vec<_>>().join("; "));
         }
         Error::Approval(ApprovalError::UnsupportedAlgorithm) => tr(es, "El certificado no admite el algoritmo elegido.", "The certificate does not support the chosen algorithm."),
+        Error::Approval(ApprovalError::Pades(_)) => tr(es, "No se puede firmar este PDF o su apariencia. No se admiten PDF cifrados, certificados, bloqueados ni XFA. Comprueba la página y las coordenadas.", "Cannot sign this PDF or appearance. Encrypted, certified, locked and XFA PDFs are unsupported. Check the page and coordinates."),
+        Error::Approval(ApprovalError::Xades(_)) => tr(es, "No se puede firmar este XML. Revisa el formato; no se admiten DTD, identificadores duplicados ni firmas XML previas.", "Cannot sign this XML. Check the format; DTDs, duplicate IDs and existing XML signatures are unsupported."),
         Error::Approval(_) => tr(es, "No se pudo completar la firma. No se ha guardado ningún resultado.", "Signing failed. No result was saved."),
         Error::DestinationExists => tr(es, "El destino ya existe. No se ha reemplazado.", "The destination already exists. It was not replaced."),
         Error::Save => tr(es, "No se pudo guardar la firma. Comprueba el directorio de destino.", "Cannot save the signature. Check the destination directory."),

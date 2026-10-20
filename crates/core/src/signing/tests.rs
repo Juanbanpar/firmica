@@ -1,4 +1,5 @@
 use super::*;
+use firmica_cades::ContentMode;
 use firmica_signing::{InputKind, Signature, SigningCapability, SigningError, SigningInput};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -9,6 +10,78 @@ const EC: SignatureAlgorithm = SignatureAlgorithm::EcdsaP256Sha256;
 // its encoded period, so they remain deterministic after the fixture expires.
 const CERTIFICATE: &[u8] = include_bytes!("fixtures/document-signer.der");
 const DOCUMENT: &[u8] = b"document\x00\xff\r\n";
+
+#[test]
+fn formats_remain_bound_to_review_and_share_one_use_certificate_checks() {
+    use firmica_signing::format::{PdfOptions, XmlMode};
+    let pdf = include_bytes!("../../../pades/tests/fixtures/document.pdf");
+    for (format, document) in [
+        (Format::Pades(PdfOptions::default()), pdf.as_slice()),
+        (Format::Xades(XmlMode::Enveloped), b"<document/>".as_slice()),
+        (Format::Xades(XmlMode::Enveloping), DOCUMENT),
+        (Format::Xades(XmlMode::Detached), DOCUMENT),
+    ] {
+        let mut key = CountingKey::new();
+        let pending = SigningReview::prepare_at(
+            "test".into(),
+            document.to_vec(),
+            &key,
+            EC,
+            format.clone(),
+            period().0,
+        )
+        .unwrap();
+        assert_eq!(pending.format(), &format);
+        assert_eq!(key.calls, 0);
+        assert!(pending.approve().sign_at(&mut key, period().0).is_err());
+        assert_eq!(
+            key.calls, 1,
+            "a format must reach the existing provider exactly once"
+        );
+        let approved = SigningReview::prepare_at(
+            "test".into(),
+            document.to_vec(),
+            &key,
+            EC,
+            format,
+            period().0,
+        )
+        .unwrap()
+        .approve();
+        key.identity
+            .additional_certificates
+            .push(CERTIFICATE.to_vec());
+        assert_eq!(
+            approved.sign_at(&mut key, period().0),
+            Err(ApprovalError::IdentityChanged)
+        );
+        assert_eq!(key.calls, 1);
+    }
+    let key = CountingKey::new();
+    assert!(matches!(
+        SigningReview::prepare_at(
+            "test".into(),
+            DOCUMENT.to_vec(),
+            &key,
+            EC,
+            Format::Pades(PdfOptions::default()),
+            period().0
+        ),
+        Err(ApprovalError::Pades(_))
+    ));
+    assert!(matches!(
+        SigningReview::prepare_at(
+            "test".into(),
+            b"<!DOCTYPE r><r/>".to_vec(),
+            &key,
+            EC,
+            Format::Xades(XmlMode::Enveloped),
+            period().0
+        ),
+        Err(ApprovalError::Xades(_))
+    ));
+    assert_eq!(key.calls, 0);
+}
 
 struct CountingKey {
     identity: CertificateIdentity,
@@ -53,8 +126,8 @@ fn period() -> (SystemTime, SystemTime) {
     let report = assess_document_signing(CERTIFICATE, UNIX_EPOCH).unwrap();
     (report.not_before(), report.not_after())
 }
-fn review(key: &CountingKey) -> CadesReview {
-    CadesReview::prepare_at(
+fn review(key: &CountingKey) -> SigningReview {
+    SigningReview::prepare_at(
         "synthetic.bin".into(),
         DOCUMENT.to_vec(),
         key,
@@ -76,7 +149,7 @@ fn preparing_and_cancelling_never_use_the_key() {
         &<[u8; 32]>::from(Sha256::digest(DOCUMENT))
     );
     assert_eq!(pending.algorithm(), EC);
-    assert_eq!(pending.content_mode(), ContentMode::Detached);
+    assert_eq!(pending.format(), &Format::Cades(ContentMode::Detached));
     assert_eq!(
         pending.certificate().fingerprint(),
         &<[u8; 32]>::from(Sha256::digest(CERTIFICATE))
@@ -156,16 +229,17 @@ fn preflight_rejects_invalid_names_limits_certificates_and_algorithms() {
     let now = period().0;
     for name in [String::new(), " \n\t".into(), "x".repeat(4097)] {
         assert_eq!(
-            CadesReview::prepare_at(name, vec![], &key, EC, ContentMode::Attached, now).err(),
+            SigningReview::prepare_at(name, vec![], &key, EC, ContentMode::Attached, now).err(),
             Some(ApprovalError::InvalidDocumentName)
         );
     }
     assert_eq!(
-        CadesReview::prepare_at("test".into(), vec![], &key, RSA, ContentMode::Attached, now).err(),
+        SigningReview::prepare_at("test".into(), vec![], &key, RSA, ContentMode::Attached, now)
+            .err(),
         Some(ApprovalError::UnsupportedAlgorithm)
     );
     assert_eq!(
-        CadesReview::prepare_at(
+        SigningReview::prepare_at(
             "test".into(),
             vec![0; MAX_CONTENT_BYTES + 1],
             &key,
@@ -178,18 +252,21 @@ fn preflight_rejects_invalid_names_limits_certificates_and_algorithms() {
     );
     key.identity.additional_certificates = vec![CERTIFICATE.to_vec(); MAX_CERTIFICATES];
     assert_eq!(
-        CadesReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now).err(),
+        SigningReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now)
+            .err(),
         Some(ApprovalError::InputTooLarge)
     );
     key.identity.additional_certificates.clear();
     key.identity.certificate_der = vec![0; MAX_CERTIFICATE_BYTES + 1];
     assert_eq!(
-        CadesReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now).err(),
+        SigningReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now)
+            .err(),
         Some(ApprovalError::InputTooLarge)
     );
     key.identity.certificate_der = vec![0];
     assert_eq!(
-        CadesReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now).err(),
+        SigningReview::prepare_at("test".into(), vec![], &key, EC, ContentMode::Attached, now)
+            .err(),
         Some(ApprovalError::Assessment(
             AssessmentError::InvalidCertificate
         ))
@@ -201,7 +278,7 @@ fn preflight_rejects_invalid_names_limits_certificates_and_algorithms() {
 fn expired_certificate_cannot_be_prepared_and_empty_documents_are_supported() {
     let mut key = CountingKey::new();
     assert_eq!(
-        CadesReview::prepare_at(
+        SigningReview::prepare_at(
             "test".into(),
             vec![],
             &key,
@@ -214,7 +291,7 @@ fn expired_certificate_cannot_be_prepared_and_empty_documents_are_supported() {
             Restriction::Expired
         ]))
     );
-    let pending = CadesReview::prepare_at(
+    let pending = SigningReview::prepare_at(
         "empty.bin".into(),
         vec![],
         &key,
