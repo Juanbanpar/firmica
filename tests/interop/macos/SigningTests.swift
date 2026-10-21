@@ -102,6 +102,7 @@ final class SigningTests: XCTestCase {
         if local {
             if scenario["algorithm"] as? String == "ec" { select("sign-algorithm", label: "ECDSA P-256 / SHA-256", index: 0) }
             let mode = scenario["mode"] as! String
+            if scenario["attached"] as? Bool == true { app.checkBoxes["Embed the document in the signature"].click() }
             if mode != "cades" {
                 let labels = ["pades": "PAdES", "enveloped": "XAdES (enveloped)", "enveloping": "XAdES (enveloping)", "detached": "XAdES (internally detached)"]
                 select("sign-format", label: labels[mode]!, index: 1)

@@ -106,27 +106,26 @@ pub fn verify(case: &Value, signature: &Path, certificates: &Path, directory: &P
             let reference = directory.join("reference.bin");
             let verified = directory.join("verified.bin");
             fs::write(&reference, &original).unwrap();
-            checked(
-                Command::new("openssl")
-                    .args([
-                        "cms", "-verify", "-cades", "-binary", "-inform", "DER", "-in",
-                    ])
-                    .arg(signature)
-                    .args(["-CAfile"])
-                    .arg(certificate)
-                    .args([
-                        "-no-CApath",
-                        "-no-CAstore",
-                        "-partial_chain",
-                        "-purpose",
-                        "any",
-                        "-content",
-                    ])
-                    .arg(reference)
-                    .arg("-out")
-                    .arg(&verified),
-                30,
-            );
+            let mut command = Command::new("openssl");
+            command
+                .args([
+                    "cms", "-verify", "-cades", "-binary", "-inform", "DER", "-in",
+                ])
+                .arg(signature)
+                .arg("-CAfile")
+                .arg(certificate)
+                .args([
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-partial_chain",
+                    "-purpose",
+                    "any",
+                ]);
+            if case["attached"] != true {
+                command.arg("-content").arg(reference);
+            }
+            command.arg("-out").arg(&verified);
+            checked(&mut command, 30);
             assert_eq!(fs::read(verified).unwrap(), original);
         }
         "pades" => {
