@@ -203,7 +203,7 @@ final class SigningTests: XCTestCase {
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             try english()
-            XCTAssertFalse(element("sign-document", type: .button).exists)
+            XCTAssertFalse(app.buttons["Document (up to 16 MiB)"].exists)
             try prepare(scenario, password: password, local: false)
             // LaunchServices must deliver to this instance without replacing pending consent.
             let before = NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first!.processIdentifier
