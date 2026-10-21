@@ -210,7 +210,10 @@ final class SigningTests: XCTestCase {
             let action = scenario["action"] as! String
             _ = try json("/prepared")
             if index == 0 {
-                XCTAssertTrue(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first!.hide())
+                app.typeKey("h", modifierFlags: .command)
+                try wait {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.isHidden == true
+                }
                 _ = try json("/hidden")
                 try wait { try self.json("/state")["warm_delivered"] as? Bool == true }
                 XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
