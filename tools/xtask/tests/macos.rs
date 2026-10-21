@@ -69,7 +69,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
             fs::write(&document, content).unwrap();
             let case = json!({"index":index,"algorithm":algorithm,"mode":mode,"document":document,
                 "certificate":fixtures.join(format!("{algorithm}.p12")),"content":STANDARD.encode(content),
-                "hash":format!("{:x}",sha2::Sha256::digest(content)),"output":fixtures.join(format!("local-{index}.{}", match mode { "cades" => "csig", "pades" => "pdf", _ => "xml" })),
+                "hash":format!("{:x}",sha2::Sha256::digest(content)),"output":fixtures.join(format!("local-{index}.{}", match mode { "cades" => "csig", "pades" => "pdf", _ => "xsig" })),
                 "format":match mode {"cades"=>"CAdES","pades"=>"PAdES",_=>"XAdES"},
                 "attached":mode=="cades" && algorithm=="ec",
                 "properties":match mode {"cades"=> if algorithm=="ec" {"mode=implicit"} else {"mode=explicit"},"pades"=>"signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Signed with Firmica", "enveloped"=>"format=XAdES Enveloped", "enveloping"=>"format=XAdES Enveloping", _=>"format=XAdES Detached"}, "action":"sign"});
