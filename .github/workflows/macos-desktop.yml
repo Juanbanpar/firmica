@@ -41,10 +41,8 @@ jobs:
       - name: Build and seal native application
         run: cargo xtask bundle --debug
       - run: cargo build --locked -p firmica-key-worker --example worker-fixture
+      - run: cargo test --locked -p firmica-key-worker
       - run: cargo test --locked -p firmica-key-worker --test worker -- --ignored
-      - run: cargo test --locked -p firmica-key-worker -p desktop -p xtask
-      - run: cargo clippy --locked -p firmica-key-worker -p desktop -p xtask --all-targets -- -D warnings
-      - run: cargo doc --locked -p firmica-key-worker -p desktop -p xtask --no-deps
       - name: Extract and verify relocated bundle
         run: |
           destination="$RUNNER_TEMP/Firmica space & 'apostrophe'"
@@ -55,14 +53,17 @@ jobs:
           echo "FIRMICA_TEST_APP=$app" >> "$GITHUB_ENV"
           echo "FIRMICA_TEST_WORKER=$app/Contents/MacOS/firmica-key-worker" >> "$GITHUB_ENV"
           codesign --verify --deep --strict "$app"
-      - name: Verify native provider cleanup
-        run: cargo test --locked -p desktop -- --ignored --test-threads=1
       - name: Install Firefox automation
         run: |
           npm ci
           npx playwright install firefox
       - name: Verify native dialogs and Firefox AutoScript signing
         run: cargo test --locked -p xtask --test macos -- --ignored --nocapture --test-threads=1
+      - run: cargo test --locked -p desktop -p xtask
+      - run: cargo clippy --locked -p firmica-key-worker -p desktop -p xtask --all-targets -- -D warnings
+      - run: cargo doc --locked -p firmica-key-worker -p desktop -p xtask --no-deps
+      - name: Verify native provider cleanup
+        run: cargo test --locked -p desktop -- --ignored --test-threads=1
       - name: Save bundle and acceptance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
