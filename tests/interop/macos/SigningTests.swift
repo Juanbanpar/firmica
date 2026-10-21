@@ -26,9 +26,11 @@ final class SigningTests: XCTestCase {
         app.descendants(matching: type).matching(identifier: identifier).firstMatch
     }
 
-    private func english() {
+    private func english() throws {
+        try wait({ self.app.buttons["English"].exists || self.app.buttons["Español"].exists }, seconds: 15)
         let button = app.buttons["English"]
-        if button.waitForExistence(timeout: 2) { button.click() }
+        if button.exists { button.click() }
+        XCTAssertTrue(app.buttons["Español"].waitForExistence(timeout: 10))
     }
 
     private func capture(_ name: String) {
@@ -159,7 +161,7 @@ final class SigningTests: XCTestCase {
             app.activate()
             XCTAssertTrue(app.links["Sign a document"].waitForExistence(timeout: 15))
             app.links["Sign a document"].click()
-            english()
+            try english()
             if index == 0 {
                 try choose("sign-document", path: nil)
                 XCTAssertFalse(app.buttons["Open and review"].isEnabled)
@@ -196,7 +198,7 @@ final class SigningTests: XCTestCase {
                 URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
-            english()
+            try english()
             XCTAssertFalse(element("sign-document", type: .button).exists)
             try prepare(scenario, password: password, local: false)
             // LaunchServices must deliver to this instance without replacing pending consent.
