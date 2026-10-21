@@ -165,9 +165,24 @@ pub fn verify(case: &Value, signature: &Path, certificates: &Path, directory: &P
             assert!(image.with_extension("png").metadata().unwrap().len() > 1000);
         }
         _ => {
+            let xml = fs::read_to_string(signature).unwrap();
+            let parsed = roxmltree::Document::parse(&xml).unwrap();
+            let embedded = parsed
+                .descendants()
+                .find(|node| {
+                    node.has_tag_name(("http://www.w3.org/2000/09/xmldsig#", "X509Certificate"))
+                })
+                .unwrap();
+            assert_eq!(
+                decode(embedded.text().unwrap()),
+                fs::read(certificates.join(format!("{}.der", case["algorithm"].as_str().unwrap())))
+                    .unwrap()
+            );
+            // XMLSec 1.3 resolves X509Data through its certificate store in strict
+            // mode. Trust only the already pinned synthetic fixture certificate.
             checked(
                 Command::new("xmlsec1")
-                    .args(["--verify", "--pubkey-cert-pem"])
+                    .args(["--verify", "--trusted-pem"])
                     .arg(certificate)
                     .args([
                         "--enabled-reference-uris",
@@ -180,8 +195,6 @@ pub fn verify(case: &Value, signature: &Path, certificates: &Path, directory: &P
                     .arg(signature),
                 30,
             );
-            let xml = fs::read_to_string(signature).unwrap();
-            let parsed = roxmltree::Document::parse(&xml).unwrap();
             if case["mode"] == "enveloped" {
                 let expected =
                     roxmltree::Document::parse(std::str::from_utf8(&original).unwrap()).unwrap();

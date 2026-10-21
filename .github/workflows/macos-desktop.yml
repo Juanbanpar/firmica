@@ -43,6 +43,8 @@ jobs:
       - run: cargo build --locked -p firmica-key-worker --example worker-fixture
       - run: cargo test --locked -p firmica-key-worker
       - run: cargo test --locked -p firmica-key-worker --test worker -- --ignored
+      - name: Verify XAdES with the installed XMLSec version
+        run: cargo test --locked -p firmica-xades --test encoding xmlsec_ -- --ignored
       - name: Extract and verify relocated bundle
         run: |
           destination="$RUNNER_TEMP/Firmica space & 'apostrophe'"
