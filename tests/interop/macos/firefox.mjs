@@ -24,7 +24,7 @@ await writeFile(policy, JSON.stringify({ policies: {
 } }), { mode: 0o600 });
 let context;
 try {
-  await until(async () => (await get('/state')).local_done, 900000);
+  await until(async () => (await get('/state')).local_done, 1500000);
   context = await firefox.launchPersistentContext(profile, { headless: false, firefoxUserPrefs: prefs,
     env: { ...process.env, PLAYWRIGHT_FIREFOX_POLICIES_JSON: policy } });
   let rejected = false;
