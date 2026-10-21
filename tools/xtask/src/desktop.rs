@@ -108,7 +108,9 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     macos::configure(&mut dx)?;
     checked(&mut dx)?;
     #[cfg(target_os = "macos")]
-    return macos::stage(root, &target, profile, triple, &worker, bundle);
+    {
+        macos::stage(root, &target, profile, triple, &worker, bundle)
+    }
     #[cfg(not(target_os = "macos"))]
     {
         let platform = if windows { "windows" } else { "linux" };

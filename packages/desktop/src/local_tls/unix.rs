@@ -13,7 +13,7 @@ pub(super) fn config_base() -> Result<PathBuf, Error> {
         if !home.is_absolute() {
             return Err(Error::Directory);
         }
-        return Ok(home.join("Library/Application Support"));
+        Ok(home.join("Library/Application Support"))
     }
     #[cfg(target_os = "linux")]
     config_home(

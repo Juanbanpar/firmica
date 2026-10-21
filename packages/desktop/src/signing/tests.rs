@@ -96,6 +96,12 @@ fn bounded_reads_reject_nonregular_and_oversize_inputs() {
         read_bounded(&temp.path().join("absent"), 1024),
         Err(Error::ReadInput)
     ));
+    #[cfg(target_os = "macos")]
+    {
+        let link = temp.path().join("document-link");
+        symlink(&path, &link).unwrap();
+        assert!(matches!(read_bounded(&link, 1024), Err(Error::ReadInput)));
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let fifo = temp.path().join("pipe");
