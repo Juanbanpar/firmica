@@ -148,7 +148,13 @@ final class SigningTests: XCTestCase {
         let browser = config["browser"] as! [[String: Any]]
         let password = config["password"] as! String
         for (index, scenario) in local.enumerated() {
-            app.launch()
+            // Launch the distributed app through LaunchServices. XCTest's launch
+            // injects user-default arguments that this CLI does not accept.
+            let evidence = config["evidence"] as! String
+            _ = try command("/usr/bin/open", ["-a", config["app"] as! String,
+                "--stdout", evidence + "/application.stdout.log", "--stderr", evidence + "/application.stderr.log"])
+            try wait { !NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").isEmpty }
+            app.activate()
             XCTAssertTrue(app.links["Sign a document"].waitForExistence(timeout: 15))
             app.links["Sign a document"].click()
             english()

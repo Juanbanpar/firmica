@@ -84,7 +84,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         browser.push(case);
     }
     use sha2::Digest;
-    let configuration = json!({"local":local,"browser":browser,"fixtures":fixtures,"evidence":output_dir,"password":macos_support::PASSWORD});
+    let configuration = json!({"app":app,"local":local,"browser":browser,"fixtures":fixtures,"evidence":output_dir,"password":macos_support::PASSWORD});
     let state = Arc::new(Mutex::new(
         json!({"index":0,"started":false,"prepared":false,"native_done":false,"local_done":false}),
     ));
