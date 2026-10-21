@@ -135,6 +135,18 @@ pub fn verify(case: &Value, signature: &Path, certificates: &Path, directory: &P
                 result.contains("Signature is Valid"),
                 "PDF signature verification failed"
             );
+            let image = support::root().join(".test-artifacts/macos").join(format!(
+                "pdf-{}",
+                signature.file_stem().unwrap().to_str().unwrap()
+            ));
+            checked(
+                Command::new("pdftoppm")
+                    .args(["-singlefile", "-scale-to", "1000", "-png"])
+                    .arg(signature)
+                    .arg(&image),
+                30,
+            );
+            assert!(image.with_extension("png").metadata().unwrap().len() > 1000);
         }
         _ => {
             checked(

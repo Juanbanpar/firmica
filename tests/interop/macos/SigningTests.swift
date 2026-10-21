@@ -148,8 +148,7 @@ final class SigningTests: XCTestCase {
         let browser = config["browser"] as! [[String: Any]]
         let password = config["password"] as! String
         for (index, scenario) in local.enumerated() {
-            // Launch the distributed app through LaunchServices. XCTest's launch
-            // injects user-default arguments that this CLI does not accept.
+            // Exercise the distributed application's normal LaunchServices entry point.
             let evidence = config["evidence"] as! String
             _ = try command("/usr/bin/open", ["-a", config["app"] as! String,
                 "--stdout", evidence + "/application.stdout.log", "--stderr", evidence + "/application.stderr.log"])

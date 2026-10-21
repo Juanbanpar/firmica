@@ -73,7 +73,7 @@ pub enum Command {
 pub enum Error {
     #[error("cannot locate an absolute per-user configuration directory")]
     Directory,
-    #[error("TLS profile paths must have private user access and no symlinks or reparse points")]
+    #[error("TLS profile paths require private user access and no symlinks, reparse points or macOS extended ACLs")]
     Permissions,
     #[error("cannot access the local TLS profile")]
     Io(#[from] io::Error),
