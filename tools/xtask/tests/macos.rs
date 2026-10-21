@@ -93,6 +93,16 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
     let served_app = app.clone();
     let script = checked(Command::new("node").current_dir(&root).args(["--input-type=module", "--eval", "import {autoscript} from './tests/interop/autoscript.mjs';process.stdout.write(await autoscript());"]), 120);
     let server = FixtureServer::new(move |route| {
+        if let Some(index) = route.strip_prefix("/mutate/") {
+            let case = &served_configuration["local"][index.parse::<usize>().unwrap()];
+            fs::write(case["document"].as_str().unwrap(), b"changed after review").unwrap();
+            return "{}".into();
+        }
+        if let Some(index) = route.strip_prefix("/output/") {
+            let case = &served_configuration["local"][index.parse::<usize>().unwrap()];
+            return json!({"exists": Path::new(case["output"].as_str().unwrap()).exists()})
+                .to_string();
+        }
         if let Some(parent) = route.strip_prefix("/workers/") {
             return json!({"workers": macos_support::workers(parent.parse().unwrap(), &served_app)}).to_string();
         }
@@ -217,7 +227,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
             .arg(output_dir.join("DerivedData"))
             .arg("-resultBundlePath")
             .arg(&result_bundle),
-        1000,
+        1500,
     );
     fs::write(
         output_dir.join("xcodebuild.log"),

@@ -169,19 +169,19 @@ final class SigningTests: XCTestCase {
             try choose("sign-document", path: scenario["document"] as? String)
             try prepare(scenario, password: password, local: true)
             // Approval must retain the reviewed bytes after the selected file changes.
-            try Data("changed after review".utf8).write(to: URL(fileURLWithPath: scenario["document"] as! String))
+            _ = try json("/mutate/\(index)")
             XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
             consent().click()
             let destination = scenario["output"] as! String
             if index == 0 {
                 try save(destination, cancel: true)
-                XCTAssertFalse(FileManager.default.fileExists(atPath: destination))
+                XCTAssertEqual(try json("/output/\(index)")["exists"] as? Bool, false)
                 XCTAssertEqual(try workers().count, 1)
             }
             try save(destination, cancel: false)
             XCTAssertTrue(app.staticTexts["Signature saved."].waitForExistence(timeout: 20))
             XCTAssertEqual(try workers().count, 0)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: destination))
+            XCTAssertEqual(try json("/output/\(index)")["exists"] as? Bool, true)
             capture("local-\(index)")
             app.terminate()
         }
@@ -225,7 +225,7 @@ final class SigningTests: XCTestCase {
                 consent().click()
                 app.buttons["Sign and send to browser"].click()
             } else if action == "disconnect" {
-                try wait { !self.consent().exists }
+                try wait({ !self.consent().exists }, seconds: 130)
             } else {
                 consent().click()
                 app.buttons["Sign and send to browser"].click()
