@@ -70,8 +70,7 @@ final class SigningTests: XCTestCase {
         if target.exists { target.click() }
         else {
             // WebKit names these buttons from their enclosing document/certificate label.
-            let button = app.buttons.matching(NSPredicate(format: "label CONTAINS %@",
-                certificate ? "PKCS#12" : "Document (up to")).firstMatch
+            let button = app.buttons[certificate ? "PKCS#12 certificate (up to 8 MiB)" : "Document (up to 16 MiB)"]
             XCTAssertTrue(button.waitForExistence(timeout: 10), app.debugDescription)
             button.click()
         }
@@ -97,7 +96,7 @@ final class SigningTests: XCTestCase {
 
     private func consent() -> XCUIElement {
         let checkbox = element("sign-acknowledge", type: .checkBox)
-        return checkbox.exists ? checkbox : app.checkBoxes.matching(NSPredicate(format: "label BEGINSWITH %@", "I authorize signing")).firstMatch
+        return checkbox.exists ? checkbox : app.checkBoxes["I authorize signing this document with this certificate and accept the unchecked items shown above."]
     }
 
     private func prepare(_ scenario: [String: Any], password: String, local: Bool) throws {
