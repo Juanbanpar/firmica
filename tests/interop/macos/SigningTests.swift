@@ -159,7 +159,7 @@ final class SigningTests: XCTestCase {
             let evidence = config["evidence"] as! String
             _ = try command("/usr/bin/open", ["-a", config["app"] as! String,
                 "--stdout", evidence + "/application.stdout.log", "--stderr", evidence + "/application.stderr.log"])
-            try wait { !NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").isEmpty }
+            try wait { NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL != nil }
             XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
                 URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
             app.activate()
@@ -197,7 +197,7 @@ final class SigningTests: XCTestCase {
                 let state = try self.json("/state")
                 return state["index"] as? Int == index && state["started"] as? Bool == true
             }, seconds: 45)
-            try wait { self.app.state != .notRunning }
+            try wait { NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL != nil }
             XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
                 URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
             app.activate()
