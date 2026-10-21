@@ -85,7 +85,7 @@ The encoders use baseline B-B building blocks; no conformance assessment, truste
 
 **Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog; cancelling it preserves the review. **Cancel** closes the certificate worker without signing.
 
-Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. Linux outputs use mode 0600; Windows outputs inherit the destination directory ACL, so choose a private directory. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
+Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. Linux and macOS outputs use mode 0600; Windows outputs inherit the destination directory ACL, so choose a private directory. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
 
 ## Invocation
 

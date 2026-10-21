@@ -113,6 +113,13 @@ pub(super) fn stage(
             if architecture.trim() != expected {
                 bail!("unexpected Mach-O architecture");
             }
+            let commands = output(Command::new("otool").arg("-l").arg(path))?;
+            if !commands
+                .lines()
+                .any(|line| line.split_whitespace().eq(["minos", "15.0"]))
+            {
+                bail!("unexpected Mach-O deployment target");
+            }
             let libraries = output(Command::new("otool").arg("-L").arg(path))?;
             for line in libraries.lines().skip(1) {
                 let library = line.trim().split(" (compatibility").next().unwrap_or("");
