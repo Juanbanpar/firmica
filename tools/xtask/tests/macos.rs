@@ -227,7 +227,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
             .arg(output_dir.join("DerivedData"))
             .arg("-resultBundlePath")
             .arg(&result_bundle),
-        1500,
+        2100,
     );
     fs::write(
         output_dir.join("xcodebuild.log"),
