@@ -2,7 +2,7 @@ use firmica_key_worker::{WorkerError, WorkerKey};
 use secrecy::{SecretBox, SecretString};
 use std::path::Path;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[test]
 fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert_eq!(
@@ -17,7 +17,7 @@ fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert!(firmica_key_worker::serve().is_err());
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod native {
     use super::*;
     use der::{Any, Decode, Encode, Sequence};
@@ -466,7 +466,7 @@ mod native {
             directory.path(),
             &format!("exec {} --stdio", quote(executable())),
         );
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let launcher = executable().to_path_buf();
         let start = Instant::now();
         assert!(matches!(

@@ -10,6 +10,11 @@
 //! and reaps the worker before releasing IPC buffers. Cleanup has a separate
 //! ten-second deadline. Windows requests WER no-heap/no-UI reporting; privileged
 //! dumps and machine LocalDumps policies are outside this guarantee.
+//! macOS installs CPU/core limits and denies debugger attachment before reading
+//! credentials. A parent watchdog samples physical footprint every 50 ms and kills
+//! workers above 256 MiB, including while idle. This threshold permits brief
+//! overshoot; it is not a hard allocation cap. Native crash reports and privileged
+//! inspection remain outside this guarantee.
 //! Other platforms fail closed; no in-process fallback is used.
 //!
 //! The worker keeps the unlocked private key until explicit close or abandonment.
@@ -32,13 +37,16 @@ use firmica_signing::{
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use std::{path::Path, time::Duration};
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod process;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 #[path = "windows.rs"]
 mod process;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod wire;
 
 /// Maximum UTF-8 password length accepted before launching a worker.
@@ -54,6 +62,8 @@ pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 pub const MAX_ADDRESS_SPACE_BYTES: u64 = 256 * 1024 * 1024;
 /// Windows per-worker committed-memory limit (256 MiB), not virtual address space.
 pub const MAX_COMMITTED_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
+/// macOS supervised physical-footprint threshold (256 MiB); brief overshoot is possible.
+pub const MAX_PHYSICAL_FOOTPRINT_BYTES: u64 = 256 * 1024 * 1024;
 /// Hard cumulative CPU-time limit, not per operation (Windows: user-mode time only).
 pub const MAX_CPU_SECONDS: u64 = 5;
 /// Parent deadline for the startup handshake/import, each signing operation and close.
@@ -92,7 +102,7 @@ pub enum WorkerError {
 pub struct WorkerKey {
     identity: CertificateIdentity,
     capabilities: Vec<SigningCapability>,
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     process: Option<process::Process>,
     failure: Option<WorkerError>,
 }
@@ -129,7 +139,7 @@ impl WorkerKey {
         container: SecretBox<Vec<u8>>,
         password: SecretString,
     ) -> Result<Self, WorkerError> {
-        if !cfg!(any(target_os = "linux", windows)) {
+        if !cfg!(any(target_os = "linux", target_os = "macos", windows)) {
             return Err(WorkerError::UnsupportedPlatform);
         }
         if !executable.is_absolute()
@@ -140,7 +150,7 @@ impl WorkerKey {
         {
             return Err(WorkerError::InvalidInput);
         }
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             let mut process = process::Process::spawn(executable)?;
             let result = (|| {
@@ -167,7 +177,7 @@ impl WorkerKey {
                 Err(error) => Err(process.abort(error)),
             }
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         unreachable!()
     }
 
@@ -181,7 +191,7 @@ impl WorkerKey {
         if let Some(error) = self.failure {
             return Err(error);
         }
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             let mut this = self;
             let mut process = this.process.take().ok_or(WorkerError::Unavailable)?;
@@ -198,7 +208,7 @@ impl WorkerKey {
                 Err(error) => Err(process.abort(error)),
             }
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         Err(WorkerError::UnsupportedPlatform)
     }
 }
@@ -223,7 +233,7 @@ impl SigningKey for WorkerKey {
         {
             return Err(SigningError::UnsupportedOperation);
         }
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             let process = self.process.as_mut().ok_or(SigningError::BackendFailure)?;
             let result = (|| {
@@ -239,7 +249,7 @@ impl SigningKey for WorkerKey {
                 }
             }
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         Err(SigningError::UnsupportedOperation)
     }
 }
@@ -248,18 +258,19 @@ impl SigningKey for WorkerKey {
 ///
 /// Linux installs resource controls and non-dumpable status. Windows verifies
 /// its parent-installed job limits and requests WER no-heap/no-UI reporting.
-/// Both complete before reading credentials. Do not call from the application process or UI.
+/// macOS installs CPU/core limits and denies debugger attachment.
+/// All complete before reading credentials. Do not call from the application process or UI.
 ///
 /// # Errors
 /// Fails closed on other platforms or if controls cannot be installed, and rejects
 /// malformed/oversized commands. EOF destroys any imported key. No diagnostics are
 /// written to stdout/stderr. The binary exits nonzero on protocol/system failures.
 pub fn serve() -> Result<(), WorkerError> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
         wire::serve()
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         Err(WorkerError::UnsupportedPlatform)
     }

@@ -1,14 +1,18 @@
+#[cfg(target_os = "macos")]
+use crate::macos::SupervisedChild as Child;
 use crate::{wire, WorkerError};
 use rustix::{
     event::{poll, PollFd, PollFlags, Timespec},
     fs::{fcntl_getfl, fcntl_setfl, OFlags},
 };
 use secrecy::{ExposeSecret, SecretBox};
+#[cfg(target_os = "linux")]
+use std::process::Child;
 use std::{
     io::{Read, Write},
     os::fd::AsFd,
     path::Path,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{ChildStdin, ChildStdout, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -20,22 +24,23 @@ pub(crate) struct Process {
 
 impl Process {
     pub(crate) fn spawn(executable: &Path) -> Result<Self, WorkerError> {
-        let child = Command::new(executable)
+        let mut child = Command::new(executable)
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| WorkerError::Unavailable)?;
-        let mut process = Self {
+        let input = child.stdin.take();
+        let output = child.stdout.take();
+        #[cfg(target_os = "macos")]
+        let child = Child::new(child)?;
+        let process = Self {
             child: Some(child),
-            input: None,
-            output: None,
+            input,
+            output,
         };
         let result = (|| {
-            let child = process.child.as_mut().ok_or(WorkerError::Unavailable)?;
-            process.input = child.stdin.take();
-            process.output = child.stdout.take();
             nonblocking(process.input.as_ref().ok_or(WorkerError::Unavailable)?)?;
             nonblocking(process.output.as_ref().ok_or(WorkerError::Unavailable)?)
         })();
@@ -50,14 +55,17 @@ impl Process {
         frame: &SecretBox<Vec<u8>>,
         deadline: Instant,
     ) -> Result<(), WorkerError> {
+        self.check_controls()?;
         let input = self.input.as_mut().ok_or(WorkerError::Unavailable)?;
         let payload = frame.expose_secret();
         let length = u32::try_from(payload.len()).map_err(|_| WorkerError::InvalidInput)?;
         write_all(input, &length.to_be_bytes(), deadline)?;
-        write_all(input, payload, deadline)
+        write_all(input, payload, deadline)?;
+        self.check_controls()
     }
 
     pub(crate) fn receive(&mut self, deadline: Instant) -> Result<SecretBox<Vec<u8>>, WorkerError> {
+        self.check_controls()?;
         let output = self.output.as_mut().ok_or(WorkerError::Unavailable)?;
         let mut length = [0; 4];
         read_exact(output, &mut length, deadline)?;
@@ -71,6 +79,7 @@ impl Process {
             secrecy::ExposeSecretMut::expose_secret_mut(&mut payload),
             deadline,
         )?;
+        self.check_controls()?;
         Ok(payload)
     }
 
@@ -78,8 +87,10 @@ impl Process {
         self.input.take();
         self.output.take();
         loop {
+            self.check_controls()?;
             let child = self.child.as_mut().ok_or(WorkerError::Unavailable)?;
             if let Some(status) = child.try_wait().map_err(|_| WorkerError::CleanupFailed)? {
+                self.check_controls()?;
                 self.child.take();
                 return if status.success() {
                     Ok(())
@@ -92,6 +103,15 @@ impl Process {
                 .ok_or(WorkerError::TimedOut)?;
             std::thread::sleep(remaining.min(Duration::from_millis(10)));
         }
+    }
+
+    fn check_controls(&self) -> Result<(), WorkerError> {
+        #[cfg(target_os = "macos")]
+        self.child
+            .as_ref()
+            .ok_or(WorkerError::Unavailable)?
+            .check()?;
+        Ok(())
     }
 
     pub(crate) fn abort(mut self, original: WorkerError) -> WorkerError {
@@ -115,7 +135,17 @@ impl Process {
                 if child.kill().is_err() && child.try_wait().ok().flatten().is_none() {
                     return Err(WorkerError::CleanupFailed);
                 }
-                child.wait().map_err(|_| WorkerError::CleanupFailed)?;
+                let deadline = Instant::now() + crate::OPERATION_TIMEOUT;
+                while child
+                    .try_wait()
+                    .map_err(|_| WorkerError::CleanupFailed)?
+                    .is_none()
+                {
+                    if Instant::now() >= deadline {
+                        return Err(WorkerError::CleanupFailed);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
             self.child.take();
         }

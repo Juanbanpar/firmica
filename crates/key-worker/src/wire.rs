@@ -316,6 +316,8 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
             .map_err(|_| WorkerError::Unavailable)?;
         }
     }
+    #[cfg(target_os = "macos")]
+    crate::macos::install_controls()?;
     #[cfg(windows)]
     crate::process::verify_controls()?;
     let mut input = std::io::stdin().lock();
