@@ -1,4 +1,4 @@
-//! Private Linux profile storage.
+//! Private Unix profile storage.
 use super::*;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
@@ -7,12 +7,22 @@ use std::{
 };
 
 pub(super) fn config_base() -> Result<PathBuf, Error> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or(Error::Directory)?);
+        if !home.is_absolute() {
+            return Err(Error::Directory);
+        }
+        return Ok(home.join("Library/Application Support"));
+    }
+    #[cfg(target_os = "linux")]
     config_home(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
     )
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn config_home(
     xdg: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,

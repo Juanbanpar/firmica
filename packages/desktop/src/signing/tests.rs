@@ -69,7 +69,7 @@ use openssl::{
 use secrecy::ExposeSecret;
 use std::{collections::BTreeSet, fs, process::Command};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::{symlink, MetadataExt};
 
 const PASSWORD: &str = "synthetic test only";
@@ -96,7 +96,7 @@ fn bounded_reads_reject_nonregular_and_oversize_inputs() {
         read_bounded(&temp.path().join("absent"), 1024),
         Err(Error::ReadInput)
     ));
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let fifo = temp.path().join("pipe");
         assert!(Command::new("mkfifo")
@@ -115,14 +115,14 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
     let target = temp.path().join("result.csig");
     save_new(&target, DOCUMENT, &active).unwrap();
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert_eq!(target.metadata().unwrap().mode() & 0o777, 0o600);
     assert!(matches!(
         save_new(&target, b"replacement", &active),
         Err(Error::DestinationExists)
     ));
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     for (name, destination) in [
         ("link", target.clone()),
         ("dangling", temp.path().join("absent")),
@@ -229,7 +229,7 @@ fn open(
         mode,
     )
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn children() -> BTreeSet<u32> {
     fs::read_dir("/proc/self/task")
         .unwrap()
@@ -240,6 +240,25 @@ fn children() -> BTreeSet<u32> {
                 .map(|pid| pid.parse().unwrap())
                 .collect::<Vec<_>>()
         })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn children() -> BTreeSet<u32> {
+    let output = Command::new("pgrep")
+        .args([
+            "-P",
+            &std::process::id().to_string(),
+            "-x",
+            "firmica-key-worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success() || output.status.code() == Some(1));
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|pid| pid.parse().unwrap())
         .collect()
 }
 
@@ -291,7 +310,7 @@ fn worker_discovery_is_beside_the_application_and_rejects_nonfiles() {
     fs::remove_dir(&worker).unwrap();
     fs::write(&worker, b"synthetic worker").unwrap();
     assert_eq!(worker_beside(&application).unwrap(), worker);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&worker, fs::Permissions::from_mode(0o666)).unwrap();
@@ -422,7 +441,7 @@ fn worker_failure_blocks_publication_and_is_reaped() {
     let before = children();
     let pending = open(temp.path(), EC, ContentMode::Attached).unwrap();
     let pid = *children().difference(&before).next().unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     rustix::process::kill_process(
         rustix::process::Pid::from_raw(pid as i32).unwrap(),
         rustix::process::Signal::KILL,

@@ -418,7 +418,7 @@ fn format_value(format: &Format) -> &'static str {
 
 fn file_dialog() -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let dialog = dialog.set_parent(dioxus::desktop::window().window.as_ref());
     dialog
 }
@@ -431,7 +431,7 @@ fn FileSelection(
     certificate: bool,
     spanish: bool,
 ) -> Element {
-    // Linux's WebView picker retains its portal/zenity fallback. Windows uses
+    // Linux's WebView picker retains its portal/zenity fallback. Other desktops use
     // the same rfd dependency as saving, with a native parented item dialog.
     #[cfg(target_os = "linux")]
     {
@@ -441,7 +441,7 @@ fn FileSelection(
             onchange: move |event| selected.set(event.files().into_iter().next().map(|file| file.path())),
         } }
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let name = selected
             .read()

@@ -17,7 +17,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::File;
 
 const MAX_CONTAINER_BYTES: usize = 8 * 1024 * 1024;
@@ -56,7 +56,7 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(Error::MissingWorker);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::fs::MetadataExt;
         if metadata.mode() & 0o022 != 0
@@ -235,10 +235,10 @@ impl Drop for Prepared {
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use rustix::fs::{open, Mode, OFlags};
     // O_NONBLOCK lets us reject pipes/devices after open without hanging on a FIFO.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut file = File::from(
         open(
             path,

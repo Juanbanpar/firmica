@@ -19,7 +19,7 @@ pub fn inbox() -> Inbox {
     args_conflicts_with_subcommands = true
 )]
 struct Arguments {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[command(subcommand)]
     command: Option<LocalCommand>,
     /// Optional afirma:// invocation; it is parsed but never executed as a command.
@@ -33,7 +33,7 @@ struct Arguments {
     origin: Option<String>,
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[derive(clap::Subcommand)]
 enum LocalCommand {
     /// Configure local browser TLS without modifying any trust store.
@@ -45,7 +45,7 @@ enum LocalCommand {
 
 pub fn launch(app: fn() -> Element) -> Result<(), String> {
     let args = Arguments::parse();
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(LocalCommand::Tls { command }) = args.command {
         return crate::local_tls::execute(command).map_err(|e| e.to_string());
     }
@@ -80,7 +80,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
             origin,
         ),
         _ => {
-            #[cfg(any(target_os = "linux", windows))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             if let Some(profile) = crate::local_tls::load_default().map_err(|e| e.to_string())? {
                 (
                     Some(
@@ -92,7 +92,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
             } else {
                 (None, None)
             }
-            #[cfg(not(any(target_os = "linux", windows)))]
+            #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
             (None, None)
         }
     };
@@ -213,7 +213,7 @@ mod tests {
     use std::time::Duration;
     use tokio::{sync::oneshot, time::timeout};
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn provisioning_commands_are_separate_from_invocation_arguments() {
         assert!(Arguments::try_parse_from([

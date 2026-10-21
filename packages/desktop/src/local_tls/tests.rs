@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::process::Command;
 
@@ -11,13 +11,13 @@ fn provisioning_is_private_unique_and_verifiable_without_a_retained_ca_key() {
     let base = temporary.path().join("config");
     let profile = initialize(&base, ORIGIN).unwrap();
     let directory = base.join(PROFILE_PARENT).join("browser-tls");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert_eq!(fs::metadata(&directory).unwrap().mode() & 0o777, 0o700);
     let mut names = fs::read_dir(&directory)
         .unwrap()
         .map(|entry| {
             let entry = entry.unwrap();
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             assert_eq!(entry.metadata().unwrap().mode() & 0o777, 0o600);
             entry.file_name().into_string().unwrap()
         })
@@ -167,7 +167,7 @@ fn existing_and_concurrently_created_profiles_are_never_replaced() {
     assert_eq!(fs::read_dir(base.join(PROFILE_PARENT)).unwrap().count(), 1);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn unsafe_permissions_symlinks_and_partial_profiles_fail_closed() {
     let temporary = tempfile::tempdir().unwrap();
@@ -213,7 +213,8 @@ fn mismatched_keys_and_trust_certificates_are_rejected() {
 #[cfg(target_os = "linux")]
 #[test]
 fn configuration_paths_and_origins_are_explicit() {
-    use super::linux::config_home;
+    #[cfg(target_os = "linux")]
+    use super::unix::config_home;
     assert_eq!(
         config_home(Some("/tmp/private-config".into()), None).unwrap(),
         Path::new("/tmp/private-config")

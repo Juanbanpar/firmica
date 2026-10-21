@@ -37,18 +37,20 @@ use x509_cert::ext::pkix::{
     name::GeneralName,
 };
 
-#[cfg(target_os = "linux")]
-mod linux;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix;
 #[cfg(windows)]
 mod windows;
-#[cfg(target_os = "linux")]
-use linux as storage;
 use storage::{check_directory, read_private, write_private};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use unix as storage;
 #[cfg(windows)]
 use windows as storage;
 
 #[cfg(target_os = "linux")]
 const PROFILE_PARENT: &str = "firmica";
+#[cfg(target_os = "macos")]
+const PROFILE_PARENT: &str = "org.firmica.client";
 #[cfg(windows)]
 const PROFILE_PARENT: &str = "firmica-config";
 
