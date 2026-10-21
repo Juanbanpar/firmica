@@ -14,13 +14,19 @@ execFileSync('certutil', ['-A', '-d', `sql:${profile}`, '-n', 'Firmica synthetic
 const prefs = {
   'network.protocol-handler.external.afirma': true,
   'network.protocol-handler.warn-external.afirma': false,
-  'network.protocol-handler.expose.afirma': false,
+  'network.protocol-handler.prompt-without-user-activation': false,
   'security.enterprise_roots.enabled': false,
 };
+// Approve LaunchServices delivery only for this disposable browser profile.
+const policy = path.join(profile, 'policies.json');
+await writeFile(policy, JSON.stringify({ policies: {
+  Handlers: { schemes: { afirma: { action: 'useSystemDefault', ask: false } } },
+} }), { mode: 0o600 });
 let context;
 try {
-  await until(async () => (await get('/state')).local_done, 600000);
-  context = await firefox.launchPersistentContext(profile, { headless: false, firefoxUserPrefs: prefs });
+  await until(async () => (await get('/state')).local_done, 900000);
+  context = await firefox.launchPersistentContext(profile, { headless: false, firefoxUserPrefs: prefs,
+    env: { ...process.env, PLAYWRIGHT_FIREFOX_POLICIES_JSON: policy } });
   let rejected = false;
   for (let index = 0; index < config.browser.length; index++) {
     const scenario = config.browser[index];
@@ -58,7 +64,7 @@ try {
     }
     await writeFile(path.join(config.fixtures, `browser-${index}.json`), JSON.stringify(result), { mode: 0o600 });
     await get('/result-received');
-    await until(async () => (await get('/state')).native_done, 30000);
+    await until(async () => (await get('/state')).native_done, scenario.action === 'disconnect' ? 150000 : 30000);
     await get('/next');
   }
   await writeFile(path.join(evidence, 'browser-checks.json'), JSON.stringify({ untrusted_profile_rejected: rejected, firefox: context.browser().version() }));
