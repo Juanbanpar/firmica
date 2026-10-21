@@ -27,7 +27,11 @@ final class SigningTests: XCTestCase {
     }
 
     private func english() throws {
-        try wait({ self.app.buttons["English"].exists || self.app.buttons["Español"].exists }, seconds: 15)
+        // Home has a separate language toggle; wait for the signing screen itself.
+        try wait({
+            self.app.buttons["Certificado PKCS#12 (hasta 8 MiB)"].exists ||
+                self.app.buttons["PKCS#12 certificate (up to 8 MiB)"].exists
+        }, seconds: 15)
         let button = app.buttons["English"]
         if button.exists { button.click() }
         XCTAssertTrue(app.buttons["Español"].waitForExistence(timeout: 10))
