@@ -192,6 +192,7 @@ final class SigningTests: XCTestCase {
             app.terminate()
         }
         _ = try json("/local-done")
+        try wait({ try self.json("/state")["browser_ready"] as? Bool == true }, seconds: 180)
         for (index, scenario) in browser.enumerated() {
             try wait({
                 let state = try self.json("/state")

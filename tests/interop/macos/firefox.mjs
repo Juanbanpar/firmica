@@ -23,13 +23,23 @@ await writeFile(policy, JSON.stringify({ policies: {
   Handlers: { schemes: { afirma: { action: 'useSystemDefault', ask: false } } },
 } }), { mode: 0o600 });
 let context;
+let untrusted;
 try {
   await until(async () => (await get('/state')).local_done, 1500000);
+  console.log('Launching the trusted Firefox profile');
   context = await firefox.launchPersistentContext(profile, { headless: false, firefoxUserPrefs: prefs,
-    env: { ...process.env, PLAYWRIGHT_FIREFOX_POLICIES_JSON: policy } });
+    timeout: 60000, env: { ...process.env, PLAYWRIGHT_FIREFOX_POLICIES_JSON: policy } });
+  console.log('Launching the fresh Firefox profile for trust isolation');
+  untrusted = await firefox.launchPersistentContext(profile + '-untrusted', {
+    headless: true, firefoxUserPrefs: prefs, timeout: 60000,
+  });
+  const fresh = await untrusted.newPage();
+  await get('/browser-ready');
+  console.log('Firefox profiles ready');
   let rejected = false;
   for (let index = 0; index < config.browser.length; index++) {
     const scenario = config.browser[index];
+    console.log(`Starting browser case ${index}`);
     let listener;
     const page = await context.newPage();
     page.on('websocket', socket => {
@@ -42,12 +52,11 @@ try {
     await page.locator('#sign').click();
     if (!rejected) {
       await until(() => listener);
-      const untrusted = await firefox.launchPersistentContext(profile + '-untrusted', { headless: false, firefoxUserPrefs: prefs });
-      try {
-        const fresh = await untrusted.newPage();
-        await assert.rejects(fresh.goto(listener.replace('wss:', 'https:')), /SEC_ERROR_UNKNOWN_ISSUER/);
-        rejected = true;
-      } finally { await untrusted.close(); }
+      await assert.rejects(fresh.goto(listener.replace('wss:', 'https:')), /SEC_ERROR_UNKNOWN_ISSUER/);
+      rejected = true;
+      await untrusted.close();
+      untrusted = undefined;
+      console.log('The fresh profile rejected the signing listener certificate');
     }
     await get('/started');
     if (index === 0) {
@@ -74,5 +83,6 @@ try {
   }
   await writeFile(path.join(evidence, 'browser-checks.json'), JSON.stringify({ untrusted_profile_rejected: rejected, firefox: context.browser().version() }));
 } finally {
+  await untrusted?.close();
   await context?.close();
 }

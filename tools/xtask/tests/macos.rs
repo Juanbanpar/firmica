@@ -128,6 +128,9 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         if route == "/local-done" {
             state["local_done"] = json!(true);
         }
+        if route == "/browser-ready" {
+            state["browser_ready"] = json!(true);
+        }
         if route == "/started" {
             state["started"] = json!(true);
         }
@@ -245,6 +248,9 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
     if !result.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&result.stdout));
         eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        if let Ok(log) = fs::read_to_string(output_dir.join("firefox.log")) {
+            eprintln!("{log}");
+        }
         panic!("native UI acceptance failed; see .test-artifacts/macos/xcodebuild.log");
     }
     let browser_status = support::wait_for(30, || browser_process.0.try_wait().unwrap());
