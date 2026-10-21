@@ -1,0 +1,19 @@
+// !$*UTF8*$!
+{
+  archiveVersion = "1";
+  classes = {  };
+  objectVersion = "56";
+  rootObject = "244210E48437B6556980A702";
+  objects = {
+    "0A3E27B8CA818264D75C8D81" = { "children" = ("A8792157CB4F27FB949C035F"); "isa" = "PBXGroup"; "name" = "Products"; "sourceTree" = "<group>"; };
+    "175AB01246347EE3CB3AD67C" = { "buildConfigurations" = ("B79606FB3AFEA5BD1609ED40"); "defaultConfigurationIsVisible" = 0; "defaultConfigurationName" = "Debug"; "isa" = "XCConfigurationList"; };
+    "244210E48437B6556980A702" = { "attributes" = { "LastUpgradeCheck" = "1640"; }; "buildConfigurationList" = "175AB01246347EE3CB3AD67C"; "compatibilityVersion" = "Xcode 14.0"; "developmentRegion" = "en"; "isa" = "PBXProject"; "knownRegions" = ("en"); "mainGroup" = "AD936FCBED631FA67E05C3EA"; "productRefGroup" = "0A3E27B8CA818264D75C8D81"; "projectDirPath" = ""; "projectRoot" = ""; "targets" = ("34A04005BCAF206EEC990BD9"); };
+    "33DD1B62EF6B9AD563FC0469" = { "fileRef" = "41CF6794BA4200B839C53531"; "isa" = "PBXBuildFile"; };
+    "34A04005BCAF206EEC990BD9" = { "buildConfigurationList" = "175AB01246347EE3CB3AD67C"; "buildPhases" = ("878A52FC5FF6A57D50B7B870"); "buildRules" = (); "dependencies" = (); "isa" = "PBXNativeTarget"; "name" = "Signing"; "productName" = "Signing"; "productReference" = "A8792157CB4F27FB949C035F"; "productType" = "com.apple.product-type.bundle.ui-testing"; };
+    "41CF6794BA4200B839C53531" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "SigningTests.swift"; "sourceTree" = "<group>"; };
+    "878A52FC5FF6A57D50B7B870" = { "buildActionMask" = 2147483647; "files" = ("33DD1B62EF6B9AD563FC0469"); "isa" = "PBXSourcesBuildPhase"; "runOnlyForDeploymentPostprocessing" = 0; };
+    "A8792157CB4F27FB949C035F" = { "explicitFileType" = "wrapper.cfbundle"; "isa" = "PBXFileReference"; "path" = "Signing.xctest"; "sourceTree" = "BUILT_PRODUCTS_DIR"; };
+    "AD936FCBED631FA67E05C3EA" = { "children" = ("41CF6794BA4200B839C53531", "0A3E27B8CA818264D75C8D81"); "isa" = "PBXGroup"; "sourceTree" = "<group>"; };
+    "B79606FB3AFEA5BD1609ED40" = { "buildSettings" = { "CODE_SIGNING_ALLOWED" = "YES"; "CODE_SIGN_IDENTITY" = "-"; "CODE_SIGNING_REQUIRED" = "NO"; "GENERATE_INFOPLIST_FILE" = "YES"; "MACOSX_DEPLOYMENT_TARGET" = "15.0"; "PRODUCT_BUNDLE_IDENTIFIER" = "org.firmica.macos-signing-tests"; "PRODUCT_NAME" = "$(TARGET_NAME)"; "SDKROOT" = "macosx"; "SUPPORTED_PLATFORMS" = "macosx"; "SWIFT_VERSION" = "5.0"; "TARGETED_DEVICE_FAMILY" = "1,2"; }; "isa" = "XCBuildConfiguration"; "name" = "Debug"; };
+  };
+}

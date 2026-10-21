@@ -1,0 +1,19 @@
+<Scheme LastUpgradeVersion="1640" version="1.3">
+  <BuildAction parallelizeBuildables="NO" buildImplicitDependencies="YES">
+    <BuildActionEntries>
+      <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES">
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="34A04005BCAF206EEC990BD9" BuildableName="Signing.xctest" BlueprintName="Signing" ReferencedContainer="container:Signing.xcodeproj" />
+      </BuildActionEntry>
+    </BuildActionEntries>
+  </BuildAction>
+  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="NO">
+    <Testables>
+      <TestableReference skipped="NO">
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="34A04005BCAF206EEC990BD9" BuildableName="Signing.xctest" BlueprintName="Signing" ReferencedContainer="container:Signing.xcodeproj" />
+      </TestableReference>
+    </Testables>
+    <EnvironmentVariables>
+      <EnvironmentVariable key="FIRMICA_TEST_ORIGIN" value="__FIRMICA_TEST_ORIGIN__" isEnabled="YES" />
+    </EnvironmentVariables>
+  </TestAction>
+</Scheme>
