@@ -110,6 +110,12 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         if route == "/result-received" {
             state["result_received"] = json!(true);
         }
+        if route == "/hidden" {
+            state["hidden"] = json!(true);
+        }
+        if route == "/warm-delivered" {
+            state["warm_delivered"] = json!(true);
+        }
         if route == "/prepared" {
             state["prepared"] = json!(true);
         }
@@ -127,7 +133,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         if route != "/" {
             return "{}".into();
         }
-        r#"<!doctype html><html lang="en"><meta charset="utf-8"><title>Firmica synthetic signing</title><button id="sign" disabled>Sign synthetic document</button><script src="/autoscript.js"></script><script>
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><title>Firmica synthetic signing</title><button id="sign" disabled>Sign synthetic document</button><a id="warm" href="afirma://cosign?ver=4&amp;format=CAdES">Warm invocation</a><script src="/autoscript.js"></script><script>
         AutoScript.enableProgressDialog(false);AutoScript.setPortRange(49152,49154);AutoScript.cargarAppAfirma();AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
         fetch('/case').then(r=>r.json()).then(c=>{let b=document.getElementById('sign');b.disabled=false;b.onclick=()=>AutoScript.sign(c.content,c.algorithm==='rsa'?'SHA256withRSA':'SHA256withECDSA',c.format,c.properties,(signature,certificate)=>window.result={signature,certificate},(type,message,code)=>window.result={type,message,code});});
         </script></html>"#.into()
@@ -228,7 +234,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         .enumerate()
     {
         let result: Value = serde_json::from_slice(
-            &fs::read(output_dir.join(format!("browser-{index}.json"))).unwrap(),
+            &fs::read(fixtures.join(format!("browser-{index}.json"))).unwrap(),
         )
         .unwrap();
         match case["action"].as_str().unwrap() {

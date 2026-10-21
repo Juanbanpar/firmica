@@ -153,6 +153,23 @@ pub fn verify(case: &Value, signature: &Path, certificates: &Path, directory: &P
                     .arg(signature),
                 30,
             );
+            let xml = fs::read_to_string(signature).unwrap();
+            let parsed = roxmltree::Document::parse(&xml).unwrap();
+            if case["mode"] == "enveloped" {
+                let expected =
+                    roxmltree::Document::parse(std::str::from_utf8(&original).unwrap()).unwrap();
+                assert_eq!(
+                    parsed.root_element().tag_name(),
+                    expected.root_element().tag_name()
+                );
+                assert_eq!(parsed.root_element().text(), expected.root_element().text());
+            } else {
+                let object = parsed
+                    .descendants()
+                    .find(|node| node.attribute("Id") == Some("Firmica-Content"))
+                    .unwrap();
+                assert_eq!(decode(object.text().unwrap()), original);
+            }
         }
     }
     if signature == Path::new(case["output"].as_str().unwrap()) {

@@ -180,8 +180,9 @@ final class SigningTests: XCTestCase {
                 let state = try self.json("/state")
                 return state["index"] as? Int == index && state["started"] as? Bool == true
             }, seconds: 45)
-            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20))
+            try wait { self.app.state != .notRunning }
             app.activate()
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             english()
             XCTAssertFalse(element("sign-document", type: .button).exists)
             try prepare(scenario, password: password, local: false)
@@ -191,8 +192,18 @@ final class SigningTests: XCTestCase {
             XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
             XCTAssertFalse(app.buttons["Sign and send to browser"].isEnabled)
             XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first!.processIdentifier, before)
+            _ = try command("/usr/bin/open", ["-b", "org.firmica.client", "afirma://sign?ver=4&dat=%00"])
+            XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
             let action = scenario["action"] as! String
             _ = try json("/prepared")
+            if index == 0 {
+                XCTAssertTrue(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first!.hide())
+                _ = try json("/hidden")
+                try wait { try self.json("/state")["warm_delivered"] as? Bool == true }
+                XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+                XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
+                XCTAssertFalse(app.buttons["Sign and send to browser"].isEnabled)
+            }
             if action == "cancel" {
                 app.buttons["Cancel"].click()
             } else if action == "worker-failure" {

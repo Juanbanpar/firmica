@@ -29,7 +29,6 @@ try {
     page.on('websocket', socket => { if (socket.url().startsWith('wss://127.0.0.1:')) listener = socket.url(); });
     await page.goto(origin);
     await page.locator('#sign').click();
-    await get('/started');
     if (!rejected) {
       await until(() => listener);
       const untrusted = await firefox.launchPersistentContext(profile + '-untrusted', { headless: false, firefoxUserPrefs: prefs });
@@ -38,6 +37,13 @@ try {
         await assert.rejects(fresh.goto(listener.replace('wss:', 'https:')), /SEC_ERROR_UNKNOWN_ISSUER/);
         rejected = true;
       } finally { await untrusted.close(); }
+    }
+    await get('/started');
+    if (index === 0) {
+      await until(async () => (await get('/state')).hidden, 45000);
+      await page.bringToFront();
+      await page.locator('#warm').click();
+      await get('/warm-delivered');
     }
     let result;
     if (scenario.action === 'disconnect') {
@@ -50,7 +56,7 @@ try {
       await page.screenshot({ path: path.join(evidence, `firefox-${index}.png`) });
       await page.close();
     }
-    await writeFile(path.join(evidence, `browser-${index}.json`), JSON.stringify(result), { mode: 0o600 });
+    await writeFile(path.join(config.fixtures, `browser-${index}.json`), JSON.stringify(result), { mode: 0o600 });
     await get('/result-received');
     await until(async () => (await get('/state')).native_done, 30000);
     await get('/next');
