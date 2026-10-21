@@ -239,14 +239,11 @@ fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> 
     use rustix::fs::{open, Mode, OFlags};
     // O_NONBLOCK lets us reject pipes/devices after open without hanging on a FIFO.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut file = File::from(
-        open(
-            path,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        )
-        .map_err(|_| Error::ReadInput)?,
-    );
+    let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK;
+    #[cfg(target_os = "macos")]
+    let flags = flags | OFlags::NOFOLLOW;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut file = File::from(open(path, flags, Mode::empty()).map_err(|_| Error::ReadInput)?);
     #[cfg(windows)]
     let mut file = {
         use std::os::windows::fs::OpenOptionsExt;

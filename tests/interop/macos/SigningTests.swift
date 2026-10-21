@@ -72,9 +72,7 @@ final class SigningTests: XCTestCase {
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 10))
         if let path {
             app.typeKey("g", modifierFlags: [.command, .shift])
-            let entry = app.sheets.textFields.firstMatch
-            XCTAssertTrue(entry.waitForExistence(timeout: 5))
-            entry.typeText(path)
+            app.typeText(path)
             app.typeKey(.return, modifierFlags: [])
             let open = app.sheets.buttons["Open"].firstMatch
             try wait { open.exists && open.isEnabled }
@@ -130,9 +128,7 @@ final class SigningTests: XCTestCase {
         } else {
             let url = URL(fileURLWithPath: path)
             app.typeKey("g", modifierFlags: [.command, .shift])
-            let folder = app.sheets.textFields.firstMatch
-            XCTAssertTrue(folder.waitForExistence(timeout: 5))
-            folder.typeText(url.deletingLastPathComponent().path)
+            app.typeText(url.deletingLastPathComponent().path)
             app.typeKey(.return, modifierFlags: [])
             let name = app.sheets.textFields["Save As:"]
             let field = name.exists ? name : app.sheets.textFields.firstMatch

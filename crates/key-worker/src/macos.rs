@@ -82,18 +82,16 @@ impl SupervisedChild {
                     match child.try_wait() {
                         Ok(Some(_)) => return,
                         Ok(None) => {
-                            let usage = footprint(child.id());
+                            let usage = if failed.load(Ordering::Acquire) { Err(io::Error::other("worker limit exceeded")) } else { footprint(child.id()) };
                             if usage.is_err() && matches!(child.try_wait(), Ok(Some(_))) { return; }
                             if !matches!(usage, Ok(bytes) if bytes <= MAX_PHYSICAL_FOOTPRINT_BYTES) {
                                 failed.store(true, Ordering::Release);
                                 // The Child remains owned and unreaped until termination, so
                                 // its PID cannot be recycled underneath the accounting query.
                                 let _ = child.kill();
-                                let deadline = std::time::Instant::now() + crate::OPERATION_TIMEOUT;
-                                while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
-                                    thread::sleep(Duration::from_millis(10));
-                                }
-                                return;
+                                // Reap on the next iteration without holding the mutex
+                                // across a wait. Parent teardown can proceed concurrently.
+
                             }
                         }
                         Err(_) => {

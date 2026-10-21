@@ -229,7 +229,7 @@ fn open(
         mode,
     )
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn children() -> BTreeSet<u32> {
     fs::read_dir("/proc/self/task")
         .unwrap()

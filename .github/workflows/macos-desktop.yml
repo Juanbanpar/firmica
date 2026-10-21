@@ -36,13 +36,15 @@ jobs:
           mkdir -p .test-artifacts/macos
           { sw_vers; uname -m; xcodebuild -version; rustc -Vv; openssl version; xmlsec1 --version; pdfsig -v; } > .test-artifacts/macos/versions.txt 2>&1
       - run: cargo fmt --all --check
-      - run: cargo test --locked -p firmica-key-worker -p desktop -p xtask
-      - run: cargo clippy --locked -p firmica-key-worker -p desktop -p xtask --all-targets -- -D warnings
-      - run: cargo doc --locked -p firmica-key-worker -p desktop -p xtask --no-deps
       - name: Install verified Dioxus CLI
         run: cargo xtask install-dx
       - name: Build and seal native application
         run: cargo xtask bundle --debug
+      - run: cargo build --locked -p firmica-key-worker --example worker-fixture
+      - run: cargo test --locked -p firmica-key-worker --test worker -- --ignored
+      - run: cargo test --locked -p firmica-key-worker -p desktop -p xtask
+      - run: cargo clippy --locked -p firmica-key-worker -p desktop -p xtask --all-targets -- -D warnings
+      - run: cargo doc --locked -p firmica-key-worker -p desktop -p xtask --no-deps
       - name: Extract and verify relocated bundle
         run: |
           destination="$RUNNER_TEMP/Firmica space & 'apostrophe'"
