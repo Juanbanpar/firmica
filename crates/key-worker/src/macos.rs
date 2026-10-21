@@ -4,7 +4,7 @@ use std::{
     io,
     process::{Child, ExitStatus},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU64, Ordering},
         mpsc, Arc, Mutex, MutexGuard,
     },
     thread::{self, JoinHandle},
@@ -12,6 +12,8 @@ use std::{
 };
 
 const INTERVAL: Duration = Duration::from_millis(50);
+// Zero means healthy; other values record the violating footprint or this sentinel.
+const ACCOUNTING_FAILURE: u64 = u64::MAX;
 
 pub(crate) fn install_controls() -> Result<(), WorkerError> {
     use rustix::process::{setrlimit, Resource, Rlimit};
@@ -48,7 +50,7 @@ fn footprint(pid: u32) -> io::Result<u64> {
 
 pub(crate) struct SupervisedChild {
     child: Arc<Mutex<Child>>,
-    failed: Arc<AtomicBool>,
+    failed: Arc<AtomicU64>,
     stop: mpsc::Sender<()>,
     monitor: Option<JoinHandle<()>>,
 }
@@ -56,7 +58,7 @@ pub(crate) struct SupervisedChild {
 impl SupervisedChild {
     pub(crate) fn new(child: Child) -> Result<Self, WorkerError> {
         let child = Arc::new(Mutex::new(child));
-        let failed = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicU64::new(0));
         let (stop, stopped) = mpsc::channel();
         let mut supervised = Self {
             child: child.clone(),
@@ -76,16 +78,16 @@ impl SupervisedChild {
             loop {
                 {
                     let Ok(mut child) = child.lock() else {
-                        failed.store(true, Ordering::Release);
+                        failed.store(ACCOUNTING_FAILURE, Ordering::Release);
                         return;
                     };
                     match child.try_wait() {
                         Ok(Some(_)) => return,
                         Ok(None) => {
-                            let usage = if failed.load(Ordering::Acquire) { Err(io::Error::other("worker limit exceeded")) } else { footprint(child.id()) };
+                            let usage = if failed.load(Ordering::Acquire) != 0 { Err(io::Error::other("worker limit exceeded")) } else { footprint(child.id()) };
                             if usage.is_err() && matches!(child.try_wait(), Ok(Some(_))) { return; }
-                            if !matches!(usage, Ok(bytes) if bytes <= MAX_PHYSICAL_FOOTPRINT_BYTES) {
-                                failed.store(true, Ordering::Release);
+                            if !matches!(usage.as_ref(), Ok(bytes) if *bytes <= MAX_PHYSICAL_FOOTPRINT_BYTES) {
+                                let _ = failed.compare_exchange(0, usage.unwrap_or(ACCOUNTING_FAILURE), Ordering::AcqRel, Ordering::Acquire);
                                 // The Child remains owned and unreaped until termination, so
                                 // its PID cannot be recycled underneath the accounting query.
                                 let _ = child.kill();
@@ -95,7 +97,7 @@ impl SupervisedChild {
                             }
                         }
                         Err(_) => {
-                            failed.store(true, Ordering::Release);
+                            failed.store(ACCOUNTING_FAILURE, Ordering::Release);
                             let _ = child.kill();
                             return;
                         }
@@ -116,7 +118,7 @@ impl SupervisedChild {
             .map_err(|_| io::Error::other("worker supervision failed"))
     }
     pub(crate) fn check(&self) -> Result<(), WorkerError> {
-        if self.failed.load(Ordering::Acquire) {
+        if self.failed.load(Ordering::Acquire) != 0 {
             Err(WorkerError::Unavailable)
         } else {
             Ok(())
@@ -169,9 +171,9 @@ mod tests {
             "memory" => {
                 let mut allocation = Vec::new();
                 let mut block = vec![0u8; 1024 * 1024];
-                for _ in 0..320 {
-                    // Repeated pages may compress below the physical-footprint
-                    // threshold under memory pressure; use incompressible data.
+                for _ in 0..1024 {
+                    // Virtual allocation size is not the supervised metric. Grow
+                    // bounded, incompressible chunks until the watchdog kills us.
                     openssl::rand::rand_bytes(&mut block).unwrap();
                     allocation.extend_from_slice(&block);
                     std::hint::black_box(&allocation);
@@ -223,7 +225,13 @@ mod tests {
             };
             assert_eq!(status.success(), mode == "limits");
             if mode == "memory" {
-                assert!(child.check().is_err());
+                let violation = child.failed.load(Ordering::Acquire);
+                assert!(
+                    violation > MAX_PHYSICAL_FOOTPRINT_BYTES && violation != ACCOUNTING_FAILURE,
+                    "expected a measured footprint violation, got {violation}"
+                );
+            } else {
+                child.check().unwrap();
             }
         }
     }
@@ -231,6 +239,10 @@ mod tests {
     #[test]
     fn abandonment_reaps_an_idle_child_and_stops_supervision() {
         let child = probe("idle");
+        thread::sleep(INTERVAL * 4);
+        child
+            .check()
+            .expect("accounting must remain available after PT_DENY_ATTACH");
         let pid = child.lock().unwrap().id();
         drop(child);
         // SAFETY: signal zero only checks process existence; no signal is delivered.
