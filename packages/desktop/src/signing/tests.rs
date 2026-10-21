@@ -154,6 +154,25 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn inherited_acl_access_prevents_signature_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(Command::new("/bin/chmod")
+        .args(["+a", "everyone allow read,file_inherit,directory_inherit"])
+        .arg(directory.path())
+        .status()
+        .unwrap()
+        .success());
+    let path = directory.path().join("signature.csig");
+    assert!(matches!(
+        save_new(&path, DOCUMENT, &AtomicBool::new(false)),
+        Err(Error::Save)
+    ));
+    assert!(!path.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
 fn fixture(directory: &Path, algorithm: SignatureAlgorithm, ca: bool) -> X509 {
     let key = match algorithm {
         RSA => PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap(),

@@ -210,6 +210,21 @@ fn mismatched_keys_and_trust_certificates_are_rejected() {
     assert!(matches!(load(&base), Err(Error::Invalid)));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn acl_grants_on_profile_files_are_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let base = directory.path().join("config");
+    let profile = initialize(&base, ORIGIN).unwrap();
+    assert!(Command::new("/bin/chmod")
+        .args(["+a", "everyone allow read"])
+        .arg(&profile.key)
+        .status()
+        .unwrap()
+        .success());
+    assert!(matches!(load(&base), Err(Error::Permissions)));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn configuration_paths_and_origins_are_explicit() {

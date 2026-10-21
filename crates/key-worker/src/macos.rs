@@ -168,8 +168,12 @@ mod tests {
         match mode.as_str() {
             "memory" => {
                 let mut allocation = Vec::new();
+                let mut block = vec![0u8; 1024 * 1024];
                 for _ in 0..320 {
-                    allocation.extend_from_slice(&vec![1u8; 1024 * 1024]);
+                    // Repeated pages may compress below the physical-footprint
+                    // threshold under memory pressure; use incompressible data.
+                    openssl::rand::rand_bytes(&mut block).unwrap();
+                    allocation.extend_from_slice(&block);
                     std::hint::black_box(&allocation);
                     thread::sleep(Duration::from_millis(2));
                 }
@@ -203,13 +207,17 @@ mod tests {
         for mode in ["limits", "memory", "cpu"] {
             let mut child = probe(mode);
             let deadline = Instant::now() + crate::OPERATION_TIMEOUT;
+            let mut peak = 0;
             let status = loop {
                 if let Some(status) = child.try_wait().unwrap() {
                     break status;
                 }
+                if let Ok(bytes) = footprint(child.lock().unwrap().id()) {
+                    peak = peak.max(bytes);
+                }
                 assert!(
                     Instant::now() < deadline,
-                    "worker exceeded termination deadline: {mode}"
+                    "worker exceeded termination deadline: {mode}, peak footprint {peak} bytes"
                 );
                 thread::sleep(INTERVAL);
             };

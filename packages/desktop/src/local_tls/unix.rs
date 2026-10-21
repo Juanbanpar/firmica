@@ -46,6 +46,16 @@ pub(super) fn check_directory(path: &Path, private: bool) -> Result<(), Error> {
     {
         return Err(Error::Permissions);
     }
+    #[cfg(target_os = "macos")]
+    if private {
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY).bits() as i32,
+            )
+            .open(path)?;
+        crate::private_fs::ensure_no_acl(&directory).map_err(|_| Error::Permissions)?;
+    }
     Ok(())
 }
 
@@ -64,6 +74,8 @@ pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
     if metadata.len() > MAX_FILE_BYTES {
         return Err(Error::Invalid);
     }
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::Permissions)?;
     let mut bytes = SecretBox::new(Box::new(Vec::new()));
     use secrecy::ExposeSecretMut;
     file.take(MAX_FILE_BYTES + 1)
@@ -80,6 +92,8 @@ pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .create_new(true)
         .mode(0o600)
         .open(path)?;
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::Permissions)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())

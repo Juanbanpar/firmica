@@ -77,6 +77,16 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
             return Err(Error::MissingWorker);
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(&path)
+            .map_err(|_| Error::MissingWorker)?;
+        crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::MissingWorker)?;
+    }
     Ok(path)
 }
 
@@ -311,6 +321,8 @@ fn save_new(path: &Path, signature: &[u8], cancelled: &AtomicBool) -> Result<(),
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::Save)?;
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(temporary.as_file()).map_err(|_| Error::Save)?;
     temporary.write_all(signature).map_err(|_| Error::Save)?;
     temporary.as_file().sync_all().map_err(|_| Error::Save)?;
     if cancelled.load(Ordering::Acquire) {
