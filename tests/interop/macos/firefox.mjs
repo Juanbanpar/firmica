@@ -32,7 +32,12 @@ try {
     const scenario = config.browser[index];
     let listener;
     const page = await context.newPage();
-    page.on('websocket', socket => { if (socket.url().startsWith('wss://127.0.0.1:')) listener = socket.url(); });
+    page.on('websocket', socket => {
+      // AutoScript races several ports; only a received frame confirms the listener.
+      if (socket.url().startsWith('wss://127.0.0.1:')) {
+        socket.on('framereceived', () => { listener = socket.url(); });
+      }
+    });
     await page.goto(origin);
     await page.locator('#sign').click();
     if (!rejected) {
