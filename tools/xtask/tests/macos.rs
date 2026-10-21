@@ -90,8 +90,21 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
     ));
     let served_state = state.clone();
     let served_configuration = configuration.clone();
+    let served_app = app.clone();
     let script = checked(Command::new("node").current_dir(&root).args(["--input-type=module", "--eval", "import {autoscript} from './tests/interop/autoscript.mjs';process.stdout.write(await autoscript());"]), 120);
     let server = FixtureServer::new(move |route| {
+        if let Some(parent) = route.strip_prefix("/workers/") {
+            return json!({"workers": macos_support::workers(parent.parse().unwrap(), &served_app)}).to_string();
+        }
+        if let Some(parent) = route.strip_prefix("/kill-worker/") {
+            let workers = macos_support::workers(parent.parse().unwrap(), &served_app);
+            assert_eq!(workers.len(), 1);
+            checked(
+                Command::new("/bin/kill").args(["-KILL", &workers[0].to_string()]),
+                10,
+            );
+            return "{}".into();
+        }
         if route == "/autoscript.js" {
             return script.clone();
         }

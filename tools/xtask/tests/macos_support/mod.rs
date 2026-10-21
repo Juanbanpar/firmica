@@ -91,6 +91,22 @@ pub fn identities(directory: &Path) -> PathBuf {
     directory.to_owned()
 }
 
+pub fn workers(parent: u32, app: &Path) -> Vec<u32> {
+    let companion = app.join("Contents/MacOS/firmica-key-worker");
+    checked(
+        Command::new("/bin/ps").args(["-axo", "pid=,ppid=,comm="]),
+        10,
+    )
+    .lines()
+    .filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let pid = fields.next()?.parse().ok()?;
+        let owner: u32 = fields.next()?.parse().ok()?;
+        (owner == parent && line.ends_with(companion.to_str().unwrap())).then_some(pid)
+    })
+    .collect()
+}
+
 pub fn decode(encoded: &str) -> Vec<u8> {
     STANDARD
         .decode(encoded)

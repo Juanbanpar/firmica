@@ -56,13 +56,9 @@ final class SigningTests: XCTestCase {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func workers() throws -> [String] {
+    private func workers() throws -> [Int] {
         guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first else { return [] }
-        return try command("/bin/ps", ["-axo", "pid=,ppid=,comm="]).split(separator: "\n").compactMap { line in
-            let fields = line.split(whereSeparator: { $0.isWhitespace })
-            guard fields.count >= 3, fields[1] == String(process.processIdentifier), line.hasSuffix("/firmica-key-worker") else { return nil }
-            return String(fields[0])
-        }
+        return try json("/workers/\(process.processIdentifier)")["workers"] as! [Int]
     }
 
     private func choose(_ identifier: String, path: String?, certificate: Bool = false) throws {
@@ -158,12 +154,16 @@ final class SigningTests: XCTestCase {
             _ = try command("/usr/bin/open", ["-a", config["app"] as! String,
                 "--stdout", evidence + "/application.stdout.log", "--stderr", evidence + "/application.stderr.log"])
             try wait { !NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").isEmpty }
+            XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
+                URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
             app.activate()
             XCTAssertTrue(app.links["Sign a document"].waitForExistence(timeout: 15))
             app.links["Sign a document"].click()
             english()
             if index == 0 {
                 try choose("sign-document", path: nil)
+                XCTAssertFalse(app.buttons["Open and review"].isEnabled)
+                try choose("sign-certificate", path: nil, certificate: true)
                 XCTAssertFalse(app.buttons["Open and review"].isEnabled)
             }
             try choose("sign-document", path: scenario["document"] as? String)
@@ -192,6 +192,8 @@ final class SigningTests: XCTestCase {
                 return state["index"] as? Int == index && state["started"] as? Bool == true
             }, seconds: 45)
             try wait { self.app.state != .notRunning }
+            XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
+                URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             english()
@@ -218,8 +220,8 @@ final class SigningTests: XCTestCase {
             if action == "cancel" {
                 app.buttons["Cancel"].click()
             } else if action == "worker-failure" {
-                let worker = try XCTUnwrap(workers().first)
-                _ = try command("/bin/kill", ["-KILL", worker])
+                let process = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first)
+                _ = try json("/kill-worker/\(process.processIdentifier)")
                 consent().click()
                 app.buttons["Sign and send to browser"].click()
             } else if action == "disconnect" {
