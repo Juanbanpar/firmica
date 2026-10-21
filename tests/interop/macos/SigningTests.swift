@@ -68,7 +68,13 @@ final class SigningTests: XCTestCase {
     private func choose(_ identifier: String, path: String?, certificate: Bool = false) throws {
         let target = element(identifier, type: .button)
         if target.exists { target.click() }
-        else { app.buttons["Choose file…"].firstMatch.click() }
+        else {
+            // WebKit names these buttons from their enclosing document/certificate label.
+            let button = app.buttons.matching(NSPredicate(format: "label CONTAINS %@",
+                certificate ? "PKCS#12" : "Document (up to")).firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 10), app.debugDescription)
+            button.click()
+        }
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 10))
         if let path {
             app.typeKey("g", modifierFlags: [.command, .shift])

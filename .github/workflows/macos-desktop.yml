@@ -70,10 +70,17 @@ jobs:
         with:
           name: macos-desktop-${{ matrix.os }}
           path: |
-            target/dx/firmica/bundle/macos/*.zip
             .test-artifacts/macos/*.json
             .test-artifacts/macos/*.txt
             .test-artifacts/macos/*.log
             .test-artifacts/macos/*.png
             .test-artifacts/macos/Signing.xcresult
+            .test-artifacts/macos/attachments
+          if-no-files-found: warn
+      - name: Save architecture-specific application bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-bundle-${{ matrix.os }}
+          path: target/dx/firmica/bundle/macos/*.zip
           if-no-files-found: warn

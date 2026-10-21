@@ -211,10 +211,19 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         [&result.stdout[..], &result.stderr[..]].concat(),
     )
     .unwrap();
-    assert!(
-        result.status.success(),
-        "native UI acceptance failed; see .test-artifacts/macos/xcodebuild.log"
+    let _ = output(
+        Command::new("xcrun")
+            .args(["xcresulttool", "export", "attachments", "--path"])
+            .arg(&result_bundle)
+            .arg("--output-path")
+            .arg(output_dir.join("attachments")),
+        60,
     );
+    if !result.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&result.stdout));
+        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        panic!("native UI acceptance failed; see .test-artifacts/macos/xcodebuild.log");
+    }
     let browser_status = support::wait_for(30, || browser_process.0.try_wait().unwrap());
     assert!(
         browser_status.success(),
