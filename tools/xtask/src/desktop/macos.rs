@@ -102,7 +102,8 @@ pub(super) fn stage(
         fs::create_dir_all(&resources)?;
         fs::copy(root.join("LICENSE"), resources.join("LICENSE"))?;
         fs::copy(&license, resources.join("OpenSSL-LICENSE.txt"))?;
-        for path in [&executable, &companion] {
+        // Intel linkers may leave the companion unsigned. Seal nested code first.
+        for path in [&companion, &executable] {
             let architecture = output(Command::new("lipo").arg("-archs").arg(path))?;
             let expected = if triple.starts_with("aarch64-") {
                 "arm64"
