@@ -245,20 +245,20 @@ fn children() -> BTreeSet<u32> {
 
 #[cfg(target_os = "macos")]
 fn children() -> BTreeSet<u32> {
-    let output = Command::new("pgrep")
-        .args([
-            "-P",
-            &std::process::id().to_string(),
-            "-x",
-            "firmica-key-worker",
-        ])
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm="])
         .output()
         .unwrap();
-    assert!(output.status.success() || output.status.code() == Some(1));
+    assert!(output.status.success());
     String::from_utf8(output.stdout)
         .unwrap()
-        .split_whitespace()
-        .map(|pid| pid.parse().unwrap())
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let parent: u32 = fields.next()?.parse().ok()?;
+            (parent == std::process::id() && line.ends_with("/firmica-key-worker")).then_some(pid)
+        })
         .collect()
 }
 

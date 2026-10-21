@@ -2,12 +2,17 @@ use crate::run as checked;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use serde::Deserialize;
+#[cfg(any(not(target_os = "macos"), test))]
+use std::io;
 use std::{
-    env, fs, io,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
+#[cfg(any(not(target_os = "macos"), test))]
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[derive(Args)]
 pub struct Options {
@@ -24,8 +29,8 @@ struct Metadata {
 }
 
 pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
-    if !cfg!(any(target_os = "linux", windows)) {
-        bail!("desktop packaging requires a native Linux or Windows host");
+    if !cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+        bail!("desktop packaging requires a native Linux, macOS or Windows host");
     }
     let windows = cfg!(windows);
     let suffix = if windows { ".exe" } else { "" };
@@ -50,6 +55,8 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     if release {
         build.arg("--release");
     }
+    #[cfg(target_os = "macos")]
+    macos::configure(&mut build)?;
     checked(&mut build)?;
     let version = Command::new("rustc").arg("-vV").output()?;
     if !version.status.success() {
@@ -88,58 +95,74 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
         dx.arg("--release");
     }
     if bundle && !windows {
-        dx.args(["--package-types", "deb"]);
+        dx.args([
+            "--package-types",
+            if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "deb"
+            },
+        ]);
     }
+    #[cfg(target_os = "macos")]
+    macos::configure(&mut dx)?;
     checked(&mut dx)?;
-    let platform = if windows { "windows" } else { "linux" };
-    let application = target
-        .join("dx/firmica")
-        .join(profile)
-        .join(platform)
-        .join("app");
-    if !application.join(format!("firmica{suffix}")).is_file() {
-        bail!("Dioxus did not produce the expected desktop executable");
-    }
-    fs::copy(
-        &worker,
-        application.join(format!("firmica-key-worker{suffix}")),
-    )?;
-    if windows {
-        fs::copy(root.join("LICENSE"), application.join("LICENSE"))?;
+    #[cfg(target_os = "macos")]
+    return macos::stage(root, &target, profile, triple, &worker, bundle);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let platform = if windows { "windows" } else { "linux" };
+        let application = target
+            .join("dx/firmica")
+            .join(profile)
+            .join(platform)
+            .join("app");
+        if !application.join(format!("firmica{suffix}")).is_file() {
+            bail!("Dioxus did not produce the expected desktop executable");
+        }
         fs::copy(
-            root.join("tools/windows/handler.ps1"),
-            application.join("handler.ps1"),
+            &worker,
+            application.join(format!("firmica-key-worker{suffix}")),
         )?;
-        let openssl = PathBuf::from(env::var_os("OPENSSL_DIR").context("OPENSSL_DIR is required")?);
-        for name in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
-            let source = [openssl.join("bin").join(name), openssl.join(name)]
+        if windows {
+            fs::copy(root.join("LICENSE"), application.join("LICENSE"))?;
+            fs::copy(
+                root.join("tools/windows/handler.ps1"),
+                application.join("handler.ps1"),
+            )?;
+            let openssl =
+                PathBuf::from(env::var_os("OPENSSL_DIR").context("OPENSSL_DIR is required")?);
+            for name in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
+                let source = [openssl.join("bin").join(name), openssl.join(name)]
+                    .into_iter()
+                    .find(|path| path.is_file())
+                    .with_context(|| {
+                        format!(
+                            "missing x64 OpenSSL runtime {name} under {}",
+                            openssl.display()
+                        )
+                    })?;
+                fs::copy(source, application.join(name))?;
+            }
+            let license = ["license.txt", "LICENSE.txt", "LICENSE"]
                 .into_iter()
+                .map(|name| openssl.join(name))
                 .find(|path| path.is_file())
-                .with_context(|| {
-                    format!(
-                        "missing x64 OpenSSL runtime {name} under {}",
-                        openssl.display()
-                    )
-                })?;
-            fs::copy(source, application.join(name))?;
+                .context("OpenSSL distribution license is missing")?;
+            fs::copy(license, application.join("OpenSSL-LICENSE.txt"))?;
+            if bundle {
+                let destination = target.join("dx/firmica/bundle/windows");
+                fs::create_dir_all(&destination)?;
+                let archive = destination.join(format!("firmica-{triple}.zip"));
+                archive_directory(&application, &archive)?;
+                println!("{}", archive.display());
+            }
         }
-        let license = ["license.txt", "LICENSE.txt", "LICENSE"]
-            .into_iter()
-            .map(|name| openssl.join(name))
-            .find(|path| path.is_file())
-            .context("OpenSSL distribution license is missing")?;
-        fs::copy(license, application.join("OpenSSL-LICENSE.txt"))?;
-        if bundle {
-            let destination = target.join("dx/firmica/bundle/windows");
-            fs::create_dir_all(&destination)?;
-            let archive = destination.join(format!("firmica-{triple}.zip"));
-            archive_directory(&application, &archive)?;
-            println!("{}", archive.display());
-        }
+        Ok(())
     }
-    Ok(())
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn archive_directory(source: &Path, destination: &Path) -> Result<()> {
     fn append(zip: &mut ZipWriter<fs::File>, root: &Path, directory: &Path) -> Result<()> {
         let mut entries = fs::read_dir(directory)?.collect::<io::Result<Vec<_>>>()?;

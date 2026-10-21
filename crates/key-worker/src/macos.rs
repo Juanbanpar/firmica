@@ -132,6 +132,24 @@ impl SupervisedChild {
     }
 }
 
+impl Drop for SupervisedChild {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(monitor) = self.monitor.take() {
+            let _ = monitor.join();
+        }
+        if let Ok(mut child) = self.lock() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+                let deadline = std::time::Instant::now() + crate::OPERATION_TIMEOUT;
+                while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,7 +171,7 @@ mod tests {
             "memory" => {
                 let mut allocation = Vec::new();
                 for _ in 0..320 {
-                    allocation.extend_from_slice(&[1u8; 1024 * 1024]);
+                    allocation.extend_from_slice(&vec![1u8; 1024 * 1024]);
                     std::hint::black_box(&allocation);
                     thread::sleep(Duration::from_millis(2));
                 }
@@ -212,23 +230,5 @@ mod tests {
         // SAFETY: signal zero only checks process existence; no signal is delivered.
         assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
         assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
-    }
-}
-
-impl Drop for SupervisedChild {
-    fn drop(&mut self) {
-        let _ = self.stop.send(());
-        if let Some(monitor) = self.monitor.take() {
-            let _ = monitor.join();
-        }
-        if let Ok(mut child) = self.lock() {
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
-                let deadline = std::time::Instant::now() + crate::OPERATION_TIMEOUT;
-                while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-        }
     }
 }

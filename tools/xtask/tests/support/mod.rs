@@ -111,7 +111,7 @@ pub struct FixtureServer {
     worker: Option<thread::JoinHandle<()>>,
 }
 impl FixtureServer {
-    pub fn new(body: fn(&str) -> String) -> Self {
+    pub fn new(body: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
         use std::{
             io::{BufRead, BufReader, Write},
             net::TcpListener,
@@ -124,6 +124,7 @@ impl FixtureServer {
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
+        let body = Arc::new(body);
         let worker = thread::spawn(move || {
             let mut connections = Vec::new();
             for stream in listener.incoming() {
@@ -131,6 +132,7 @@ impl FixtureServer {
                     break;
                 }
                 let mut stream = stream.unwrap();
+                let body = body.clone();
                 connections.push(thread::spawn(move || {
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                     stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -146,8 +148,9 @@ impl FixtureServer {
                         }
                     }
                     let route = first.split_whitespace().nth(1).unwrap_or("/");
+                    let content_type = if route.ends_with(".js") { "application/javascript" } else { "text/html; charset=utf-8" };
                     let body = body(route);
-                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", content_type, body.len(), body);
                 }));
             }
             for connection in connections {
