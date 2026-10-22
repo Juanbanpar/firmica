@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Firefox AutoScript -> registered Windows handler -> native CAdES consent."""
+"""Firefox AutoScript / protocol 4.1 -> registered Windows handler -> native CAdES consent."""
 import argparse
 import base64
 import contextlib
@@ -85,10 +85,13 @@ def main():
         script = subprocess.check_output(["node", "--input-type=module", "--eval",
                                           "import {autoscript} from './tests/interop/autoscript.mjs'; process.stdout.write(await autoscript());"],
                                          cwd=ROOT, timeout=120)
+        protocol41 = (ROOT / "tests/interop/protocol41-client.js").read_bytes()
+        protocol_port = free_port()
         html = ("""<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic Windows browser signing</title>
 <button id="rsa">RSA</button><button id="ec">P-256</button><button id="cancel">Cancel request</button>
+<button id="protocol41-rsa">Protocol 4.1 RSA</button><button id="protocol41-ec">Protocol 4.1 P-256</button><button id="protocol41-cancel">Protocol 4.1 cancel</button><button id="protocol41-worker-failure">Protocol 4.1 worker failure</button>
 <a id="warm" href="afirma://cosign?ver=4&amp;format=CAdES">Warm invocation</a>
-<script src="/autoscript.js"></script><script>
+<script src="/autoscript.js"></script><script src="/protocol41.js"></script><script>
 AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152,49154); AutoScript.cargarAppAfirma();
 AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
 for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = () => {
@@ -97,13 +100,18 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
  id === 'ec' ? 'mode=implicit' : 'mode=explicit',
  (signature,certificate) => {window.result={signature,certificate};},
  (type,message,code) => {window.result={type,message,code};});
-};</script></html>""").replace("CONTENT", base64.b64encode(CONTENT).decode()).encode()
+};
+for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById('protocol41-'+id).onclick = () => {
+ delete window.result;
+ signProtocol41({port:PROTOCOL_PORT,content:'CONTENT',algorithm:id==='ec'?'ec':'rsa',format:'CAdES',properties:id==='ec'?'mode=implicit':'mode=explicit'})
+ .then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'});
+};</script></html>""").replace("CONTENT", base64.b64encode(CONTENT).decode()).replace("PROTOCOL_PORT", str(protocol_port)).encode()
 
         class Site(BaseHTTPRequestHandler):
             def do_GET(self):
-                body = script if self.path == "/autoscript.js" else html
+                body = script if self.path == "/autoscript.js" else protocol41 if self.path == "/protocol41.js" else html
                 self.send_response(200)
-                self.send_header("Content-Type", "application/javascript" if self.path == "/autoscript.js" else "text/html; charset=utf-8")
+                self.send_header("Content-Type", "application/javascript" if self.path.endswith(".js") else "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -215,7 +223,10 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             assert "--tls-cert" not in evidence["launch_command"] and "--tls-key" not in evidence["launch_command"]
             evidence["checks"].append("Firefox cold-launches the registered app and its automatically loaded private TLS profile")
             print("Registered handler cold-launched the native application", flush=True)
-            for scenario in ("rsa", "cancel", "ec"):
+            for scenario in ("rsa", "cancel", "ec", "protocol41-rsa", "protocol41-cancel", "protocol41-ec", "protocol41-worker-failure"):
+                raw = scenario.startswith("protocol41-")
+                operation = scenario.removeprefix("protocol41-")
+                algorithm = "ec" if operation == "ec" else "rsa"
                 if scenario != "rsa":
                     # Each bootstrap admits one operation for its 120 s lifetime.
                     # Let the listener expire before AutoScript probes/relaunches.
@@ -238,6 +249,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                     browser_page.goto(origin)
                     browser_page.locator(f"#{scenario}").click()
                 native_page.locator("#request-operation").wait_for()
+                assert native_page.locator("#request-version").inner_text() == ("4.1" if raw else "4")
                 print(f"Native review received: {scenario}", flush=True)
                 native_page.locator("#sign-language").click()
                 assert native_page.locator("#sign-document").count() == 0
@@ -245,21 +257,24 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                 assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
                 assert not browser_page.evaluate("window.result")
                 assert windows_gui.processes(name="firmica.exe") == [pid]
-                if scenario == "cancel":
+                if operation == "cancel":
                     native_page.locator("#reject-request").click()
                     browser_page.wait_for_function("window.result", timeout=30000)
                     response = browser_page.evaluate("window.result")
-                    assert response["type"] == "es.gob.afirma.core.AOCancelledOperationException", response
+                    if raw:
+                        assert response["code"] == "err-11:=AF500001 - Operation cancelled by user", response
+                    else:
+                        assert response["type"] == "es.gob.afirma.core.AOCancelledOperationException", response
                     assert "signature" not in response
-                    evidence["checks"].append("native rejection reaches the browser without opening a certificate worker")
+                    evidence["checks"].append(f"{scenario}: native rejection reaches the browser without opening a certificate worker")
                     continue
-                windows_gui.dialog(automation, native_page, "#sign-certificate", directory / f"{scenario}.p12")
+                windows_gui.dialog(automation, native_page, "#sign-certificate", directory / f"{algorithm}.p12")
                 native_page.locator("#sign-password").fill(PASSWORD)
                 native_page.locator("#sign-prepare").click()
                 native_page.locator("#sign-document-hash").wait_for()
                 assert native_page.locator("#sign-document-hash").inner_text() == hashlib.sha256(CONTENT).hexdigest()
                 assert native_page.locator("#sign-save").is_disabled()
-                if scenario == "rsa":
+                if operation == "rsa":
                     browser_page.locator("#warm").click()
                     browser_page.wait_for_timeout(500)
                     assert windows_gui.processes(name="firmica.exe") == [pid]
@@ -267,16 +282,26 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
                     assert native_page.locator("#sign-document-hash").inner_text() == hashlib.sha256(CONTENT).hexdigest()
                     assert native_page.locator("#sign-save").is_disabled()
                     evidence["checks"].append("warm browser URI delivery retains one window and cannot authorize or replace the reviewed document")
+                if operation == "worker-failure":
+                    workers = windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
+                    assert len(workers) == 1
+                    subprocess.run(["taskkill.exe", "/F", "/PID", str(workers[0])], check=True, capture_output=True, timeout=15)
                 native_page.locator("#sign-acknowledge").check()
                 native_page.locator("#sign-save").click()
                 browser_page.wait_for_function("window.result", timeout=30000)
                 response = browser_page.evaluate("window.result")
+                if operation == "worker-failure":
+                    assert response["code"] == "err-00:=AF200115 - Signing failed", response
+                    assert "signature" not in response
+                    assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
+                    evidence["checks"].append("protocol 4.1 worker failure returns no signature")
+                    continue
                 assert "type" not in response, response
-                assert base64.b64decode(response["certificate"]) == openssl("x509", "-in", f"{scenario}.pem", "-outform", "DER")
-                (directory / "result.csig").write_bytes(base64.b64decode(response["signature"]))
+                assert base64.urlsafe_b64decode(response["certificate"]) == openssl("x509", "-in", f"{algorithm}.pem", "-outform", "DER")
+                (directory / "result.csig").write_bytes(base64.urlsafe_b64decode(response["signature"]))
                 arguments = ["cms", "-verify", "-cades", "-binary", "-inform", "DER", "-in", "result.csig",
-                             "-CAfile", f"{scenario}.pem", "-no-CApath", "-no-CAstore", "-partial_chain", "-purpose", "any", "-out", "verified.bin"]
-                if scenario == "rsa":
+                             "-CAfile", f"{algorithm}.pem", "-no-CApath", "-no-CAstore", "-partial_chain", "-purpose", "any", "-out", "verified.bin"]
+                if algorithm == "rsa":
                     arguments += ["-content", "original.bin"]
                 openssl(*arguments)
                 assert (directory / "verified.bin").read_bytes() == CONTENT
@@ -306,6 +331,7 @@ for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = ()
             browser_page.screenshot(path=str(options.output / "browser.png"), full_page=True)
             evidence["checks"].append("unmodified AutoScript uses trusted loopback WSS without disabling TLS verification")
             evidence["checks"].append("fresh browser bootstraps reuse the native process after listener expiry")
+            evidence["protocols"] = ["4", "4.1"]
             browser.close()
             browser = None
             evidence["passed"] = True

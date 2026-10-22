@@ -13,7 +13,7 @@ use support::{checked, output, FixtureServer, Process};
 
 #[test]
 #[ignore = "requires a disposable macOS desktop, Xcode, Firefox, NSS, Poppler and XMLSec"]
-fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
+fn extracted_bundle_signs_local_documents_and_browser_requests() {
     let root = support::root();
     let app = PathBuf::from(env::var_os("FIRMICA_TEST_APP").expect("FIRMICA_TEST_APP"))
         .canonicalize()
@@ -84,6 +84,19 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         browser.push(case);
     }
     use sha2::Digest;
+    for case in &mut browser {
+        case["protocol"] = json!("4");
+    }
+    for mut case in browser.clone() {
+        case["protocol"] = json!("4.1");
+        case["index"] = json!(browser.len());
+        case["port"] = json!(std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port());
+        browser.push(case);
+    }
     let configuration = json!({"app":app,"local":local,"browser":browser,"fixtures":fixtures,"evidence":output_dir,"password":macos_support::PASSWORD});
     let state = Arc::new(Mutex::new(
         json!({"index":0,"started":false,"prepared":false,"native_done":false,"local_done":false}),
@@ -92,6 +105,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
     let served_configuration = configuration.clone();
     let served_app = app.clone();
     let script = checked(Command::new("node").current_dir(&root).args(["--input-type=module", "--eval", "import {autoscript} from './tests/interop/autoscript.mjs';process.stdout.write(await autoscript());"]), 120);
+    let protocol41 = fs::read_to_string(root.join("tests/interop/protocol41-client.js")).unwrap();
     let server = FixtureServer::new(move |route| {
         if let Some(index) = route.strip_prefix("/mutate/") {
             let case = &served_configuration["local"][index.parse::<usize>().unwrap()];
@@ -117,6 +131,9 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         }
         if route == "/autoscript.js" {
             return script.clone();
+        }
+        if route == "/protocol41.js" {
+            return protocol41.clone();
         }
         if route == "/config" {
             return served_configuration.to_string();
@@ -160,9 +177,9 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
         if route != "/" {
             return "{}".into();
         }
-        r#"<!doctype html><html lang="en"><meta charset="utf-8"><title>Firmica synthetic signing</title><button id="sign" disabled>Sign synthetic document</button><a id="warm" href="afirma://cosign?ver=4&amp;format=CAdES">Warm invocation</a><script src="/autoscript.js"></script><script>
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><title>Firmica synthetic signing</title><button id="sign" disabled>Sign synthetic document</button><a id="warm" href="afirma://cosign?ver=4&amp;format=CAdES">Warm invocation</a><script src="/autoscript.js"></script><script src="/protocol41.js"></script><script>
         AutoScript.enableProgressDialog(false);AutoScript.setPortRange(49152,49154);AutoScript.cargarAppAfirma();AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
-        fetch('/case').then(r=>r.json()).then(c=>{let b=document.getElementById('sign');b.disabled=false;b.onclick=()=>AutoScript.sign(c.content,c.algorithm==='rsa'?'SHA256withRSA':'SHA256withECDSA',c.format,c.properties,(signature,certificate)=>window.result={signature,certificate},(type,message,code)=>window.result={type,message,code});});
+        fetch('/case').then(r=>r.json()).then(c=>{let b=document.getElementById('sign');b.disabled=false;b.onclick=()=>c.protocol==='4.1'?signProtocol41(c).then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'}):AutoScript.sign(c.content,c.algorithm==='rsa'?'SHA256withRSA':'SHA256withECDSA',c.format,c.properties,(signature,certificate)=>window.result={signature,certificate},(type,message,code)=>window.result={type,message,code});});
         </script></html>"#.into()
     });
     let origin = format!("http://127.0.0.1:{}", server.port);
@@ -230,7 +247,7 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
             .arg(output_dir.join("DerivedData"))
             .arg("-resultBundlePath")
             .arg(&result_bundle),
-        2100,
+        3300,
     );
     fs::write(
         output_dir.join("xcodebuild.log"),
@@ -292,13 +309,29 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
                 .unwrap();
                 macos_support::verify(case, &path, &certificates, fixtures);
             }
-            "cancel" => assert_eq!(
-                result["type"],
-                "es.gob.afirma.core.AOCancelledOperationException"
-            ),
+            "cancel" => {
+                assert!(result["signature"].is_null());
+                if case["protocol"] == "4.1" {
+                    assert_eq!(
+                        result["code"],
+                        "err-11:=AF500001 - Operation cancelled by user"
+                    );
+                } else {
+                    assert_eq!(
+                        result["type"],
+                        "es.gob.afirma.core.AOCancelledOperationException"
+                    );
+                }
+            }
             "worker-failure" => {
                 assert!(result["signature"].is_null());
-                assert!(result["code"].as_str().unwrap().starts_with("SAF_09:"));
+                assert!(result["code"].as_str().unwrap().starts_with(
+                    if case["protocol"] == "4.1" {
+                        "err-00:=AF200115 - "
+                    } else {
+                        "SAF_09:"
+                    }
+                ));
             }
             "disconnect" => assert_eq!(result["disconnected"], true),
             _ => unreachable!(),
@@ -309,6 +342,6 @@ fn extracted_bundle_signs_local_documents_and_unmodified_autoscript_requests() {
     assert_eq!(browser_checks["untrusted_profile_rejected"], true);
     support::report(
         &output_dir.join("result.json"),
-        &json!({"passed":true,"architecture":env::consts::ARCH,"local_signatures":local.len(),"browser_scenarios":browser.len(),"browser":browser_checks}),
+        &json!({"passed":true,"architecture":env::consts::ARCH,"local_signatures":local.len(),"browser_scenarios":browser.len(),"browser":browser_checks,"protocols":["4","4.1"]}),
     );
 }

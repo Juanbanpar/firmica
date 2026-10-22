@@ -217,6 +217,7 @@ final class SigningTests: XCTestCase {
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             try english()
+            XCTAssertTrue(app.staticTexts[scenario["protocol"] as! String].exists)
             XCTAssertFalse(app.buttons["Document (up to 16 MiB)"].exists)
             try prepare(scenario, password: password, local: false)
             // LaunchServices must deliver to this instance without replacing pending consent.
@@ -229,7 +230,7 @@ final class SigningTests: XCTestCase {
             XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
             let action = scenario["action"] as! String
             _ = try json("/prepared")
-            if index == 0 {
+            if index == 0 || ((scenario["protocol"] as? String) == "4.1" && (browser[index - 1]["protocol"] as? String) != "4.1") {
                 app.typeKey("h", modifierFlags: .command)
                 try wait {
                     NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.isHidden == true

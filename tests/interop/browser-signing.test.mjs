@@ -40,41 +40,12 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       : operation === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
       : operation === 'large-detached' ? Buffer.alloc(1024 * 1024, 0xa5) : smallContent;
     const script = await autoscript();
-    const rawClient = `
-      document.querySelector('#sign').onclick = async () => {
-        const session = '0123456789abcdef';
-        window.location.href = 'afirma://websocket?v=4.1&jvc=4&ports=${protocolPort}&idsession=' + session;
-        const deadline = performance.now() + 10000;
-        let socket;
-        while (!socket && performance.now() < deadline) {
-          socket = await new Promise(resolve => {
-            const candidate = new WebSocket('wss://127.0.0.1:${protocolPort}/');
-            candidate.onopen = () => resolve(candidate);
-            candidate.onerror = () => { candidate.close(); resolve(undefined); };
-          });
-          if (!socket) await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        if (!socket) throw new Error('Native protocol 4.1 listener did not start');
-        const exchange = message => new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('WSS reply timed out')), 5000);
-          socket.onmessage = event => { clearTimeout(timer); resolve(event.data); };
-          socket.send(message);
-        });
-        if (await exchange('echo=-idsession=' + session + '@EOF') !== 'OK') throw new Error('Session rejected');
-        let result = await exchange('afirma://sign?' + new URLSearchParams({
-          idsession: session, ver: '4.1', dat: '${content.toString('base64')}',
-          algorithm: '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', format: '${format}', properties: btoa(${JSON.stringify(properties)}) }));
-        while (result === '#wait') {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          result = await exchange('getresult?idsession=' + session);
-        }
-        window.result = result.startsWith('err-') ? {code: result}
-          : {certificate: result.split('|')[0], signature: result.split('|')[1]};
-        socket.close();
-      };
-    `;
+    const protocol41Script = await readFile(path.join(root,'tests/interop/protocol41-client.js'));
+    const rawClient = `document.querySelector('#sign').onclick = () => signProtocol41(${JSON.stringify({
+      port:protocolPort, content:content.toString('base64'), algorithm:ec ? 'ec' : 'rsa', format, properties,
+    })}).then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'});`;
     const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic browser signing</title>
-      <button id="sign">Sign</button><script src="/autoscript.js"></script><script>
+      <button id="sign">Sign</button><script src="/autoscript.js"></script><script src="/protocol41.js"></script><script>
       ${protocol41 ? rawClient : `AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152, 49154); AutoScript.cargarAppAfirma(); AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
       document.querySelector('#sign').onclick = () => AutoScript.sign('${content.toString('base64')}',
         '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', '${format}', ${JSON.stringify(properties)},
@@ -82,8 +53,8 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         (type, message, code) => {window.result = {type, message, code};});`}
       </script></html>`;
     const server = createServer((req,res) => {
-      res.setHeader('Content-Type', req.url === '/autoscript.js' ? 'text/javascript' : 'text/html');
-      res.end(req.url === '/autoscript.js' ? script : html);
+      res.setHeader('Content-Type', req.url.endsWith('.js') ? 'text/javascript' : 'text/html');
+      res.end(req.url === '/autoscript.js' ? script : req.url === '/protocol41.js' ? protocol41Script : html);
     });
     let child, browser, native, xenv;
     let stderr = '';

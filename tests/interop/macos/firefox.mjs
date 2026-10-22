@@ -59,7 +59,7 @@ try {
       console.log('The fresh profile rejected the signing listener certificate');
     }
     await get('/started');
-    if (index === 0) {
+    if (index === 0 || (scenario.protocol === '4.1' && config.browser[index - 1]?.protocol !== '4.1')) {
       await until(async () => (await get('/state')).hidden, 45000);
       await page.bringToFront();
       await page.locator('#warm').click();
