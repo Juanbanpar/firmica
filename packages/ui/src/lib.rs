@@ -152,7 +152,8 @@ pub fn Navbar(children: Element) -> Element {
 pub fn Diagnostics() -> Element {
     rsx! { main { class: "mx-auto max-w-3xl p-6 sm:p-12",
         h1 { class: "mb-4 text-2xl font-semibold", "Diagnostics / Diagnóstico" }
-        p { "The Linux desktop supports local CAdES signing and inline CAdES signing over an explicitly configured TLS WebSocket session. Bare URI requests and unsupported operations permit review and cancellation only." }
+        p { "Linux, macOS and Windows support local CAdES, PAdES and XAdES signing with PKCS#12 certificates. Supported browser signing requests require local TLS setup, browser trust and explicit consent. Bare URI requests permit review and cancellation only. / Linux, macOS y Windows admiten firmas locales CAdES, PAdES y XAdES con certificados PKCS#12. Las solicitudes de firma desde el navegador requieren configurar TLS local, la confianza del navegador y el consentimiento explícito. Las invocaciones URI directas solo permiten revisión y cancelación." }
+        p { class: "mt-4", "Android and iOS support invocation review and cancellation; document signing is unavailable. / Android e iOS permiten revisar y cancelar invocaciones; la firma de documentos no está disponible." }
         p { class: "mt-4", "Certificate trust, revocation and legal qualification are not validated. / No se validan la confianza del certificado, su revocación ni su cualificación legal." }
     } }
 }
