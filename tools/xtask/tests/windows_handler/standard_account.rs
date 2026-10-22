@@ -10,7 +10,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
     NetworkManagement::NetManagement::{
-        NetLocalGroupAddMembers, NetUserAdd, NetUserDel, LOCALGROUP_MEMBERS_INFO_3,
+        NetLocalGroupAddMembers, NetUserAdd, NetUserDel, LOCALGROUP_MEMBERS_INFO_0,
         UF_NORMAL_ACCOUNT, UF_SCRIPT, USER_INFO_1, USER_PRIV_USER,
     },
     Security::{
@@ -70,7 +70,7 @@ impl Drop for Account {
     }
 }
 
-fn account_sid(name: &[u16]) -> Vec<u16> {
+fn account_sid(name: &[u16]) -> (Vec<u16>, [usize; 16]) {
     let mut sid = [0usize; 16];
     let mut size = mem::size_of_val(&sid) as u32;
     let mut domain = [0u16; 256];
@@ -102,7 +102,7 @@ fn account_sid(name: &[u16]) -> Vec<u16> {
         }
         let result = std::slice::from_raw_parts(text, length + 1).to_vec();
         LocalFree(text.cast());
-        result
+        (result, sid)
     }
 }
 
@@ -258,17 +258,17 @@ fn registration_under_standard_account() {
         sid: None,
         logged_on: false,
     };
-    account.sid = Some(account_sid(&account.name));
-    let mut member_name = wide(format!(".\\{name}"));
-    let member = LOCALGROUP_MEMBERS_INFO_3 {
-        lgrmi3_domainandname: member_name.as_mut_ptr(),
+    let (sid_text, mut sid) = account_sid(&account.name);
+    account.sid = Some(sid_text);
+    let member = LOCALGROUP_MEMBERS_INFO_0 {
+        lgrmi0_sid: sid.as_mut_ptr().cast(),
     };
     let status = unsafe {
         NetLocalGroupAddMembers(
             ptr::null(),
             users_group().as_ptr(),
-            3,
-            (&member as *const LOCALGROUP_MEMBERS_INFO_3).cast(),
+            0,
+            (&member as *const LOCALGROUP_MEMBERS_INFO_0).cast(),
             1,
         )
     };
