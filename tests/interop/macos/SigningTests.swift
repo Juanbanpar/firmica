@@ -48,6 +48,14 @@ final class SigningTests: XCTestCase {
         add(hierarchy)
     }
 
+    private func terminateAndWait() throws {
+        app.terminate()
+        // XCTest state can settle before LaunchServices removes the old instance.
+        try wait {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").isEmpty
+        }
+    }
+
     private func command(_ executable: String, _ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -189,7 +197,7 @@ final class SigningTests: XCTestCase {
             XCTAssertEqual(try workers().count, 0)
             XCTAssertEqual(try json("/output/\(index)")["exists"] as? Bool, true)
             capture("local-\(index)")
-            app.terminate()
+            try terminateAndWait()
         }
         _ = try json("/local-done")
         try wait({ try self.json("/state")["browser_ready"] as? Bool == true }, seconds: 180)
@@ -243,7 +251,7 @@ final class SigningTests: XCTestCase {
             try wait({ try self.json("/state")["result_received"] as? Bool == true }, seconds: 30)
             try wait { try self.workers().isEmpty }
             capture("browser-\(index)-\(action)")
-            app.terminate()
+            try terminateAndWait()
             _ = try json("/native-done")
         }
     }
