@@ -83,6 +83,8 @@ def connect(playwright, port, process, evidence):
 
 
 def dialog(automation, page, selector, filename):
+    # A WebView click does not bring the native application to the foreground.
+    automation.top_window().set_focus()
     page.locator(selector).click()
     native = automation.window(class_name="#32770")
     native.wait("ready", timeout=15)
