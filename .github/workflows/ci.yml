@@ -91,7 +91,7 @@ jobs:
       - run: cargo +stable clippy --locked -p xtask --all-targets -- -D warnings
       - name: Verify per-user Windows handler registration
         if: runner.os == 'Windows'
-        run: cargo +stable test --locked -p xtask --test windows_handler -- --ignored --nocapture
+        run: cargo +stable test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
       - name: Install verified Dioxus CLI 0.7.10
         run: cargo xtask install-dx
       - name: Build desktop application
@@ -141,6 +141,7 @@ jobs:
             .test-artifacts/windows/
             .test-artifacts/windows-signing/
             .test-artifacts/windows-browser/
+            .test-artifacts/windows-standard-account/
             target/dx/firmica/bundle/windows/*.zip
           if-no-files-found: warn
       - name: Verify desktop signing and cleanup with the native worker
@@ -171,6 +172,8 @@ jobs:
       - run: npx playwright install --with-deps chromium firefox
       - run: cargo +stable build --locked -p firmica-transport --example probe
       - run: npm run test:autoscript
+      - name: Verify protocol 4.1 with Chromium and Firefox
+        run: cargo test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- --ignored --nocapture
       - run: npm run test:desktop
       - name: Verify extracted Debian payload
         run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
@@ -187,6 +190,13 @@ jobs:
       - name: Verify cold browser invocation with the Debian TLS profile
         run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:os-handler
       - run: npm run test:lifecycle
+      - name: Save protocol 4.1 browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: protocol41-browsers
+          path: .test-artifacts/protocol41/
+          if-no-files-found: warn
 
   audit:
     runs-on: ubuntu-latest
