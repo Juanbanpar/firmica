@@ -393,6 +393,9 @@ pub enum TransportError {
 #[cfg(test)]
 mod transfer_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+mod browser_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
