@@ -1,6 +1,8 @@
 //! A fresh logon and HKCU hive, not a filtered administrator token.
 #[path = "desktop_access.rs"]
 mod desktop_access;
+#[path = "startup.rs"]
+mod startup;
 use super::*;
 use std::{
     ffi::OsStr,
@@ -10,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0},
     NetworkManagement::NetManagement::{
         NetLocalGroupAddMembers, NetUserAdd, NetUserDel, LOCALGROUP_MEMBERS_INFO_0,
         UF_NORMAL_ACCOUNT, UF_SCRIPT, USER_INFO_1, USER_PRIV_USER,
@@ -32,7 +34,7 @@ use windows_sys::Win32::{
             CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess,
             OpenProcessToken, ResumeThread, TerminateProcess, WaitForSingleObject,
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, LOGON_WITH_PROFILE,
-            PROCESS_INFORMATION, STARTUPINFOW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
         },
     },
     UI::Shell::DeleteProfileW,
@@ -270,7 +272,8 @@ fn packaged_registration(staged: &Path) {
     assert!(!KEYS.iter().any(|path| exists(path)));
 }
 
-fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u16, PathBuf) {
+fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, PathBuf) {
+    use std::os::windows::io::AsRawHandle;
     let bundle = staged.join("Bundle space & 'apostrophe'");
     let application = bundle.join(format!("firmica-qa-{}.exe", std::process::id()));
     fs::rename(bundle.join("firmica.exe"), &application).unwrap();
@@ -308,9 +311,21 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u16, PathBu
         .chain(Some(0))
         .collect();
     let mut desktop = wide(r"WinSta0\Default");
+    let log = fs::File::create(staged.join("native-application.log")).unwrap();
+    let input = fs::File::open("NUL").unwrap();
+    for handle in [log.as_raw_handle(), input.as_raw_handle()] {
+        assert_ne!(
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+            0
+        );
+    }
     let startup = STARTUPINFOW {
         cb: mem::size_of::<STARTUPINFOW>() as u32,
         lpDesktop: desktop.as_mut_ptr(),
+        dwFlags: STARTF_USESTDHANDLES,
+        hStdInput: input.as_raw_handle(),
+        hStdOutput: log.as_raw_handle(),
+        hStdError: log.as_raw_handle(),
         ..Default::default()
     };
     let mut process = PROCESS_INFORMATION::default();
@@ -324,7 +339,7 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u16, PathBu
                 command.as_mut_ptr(),
                 ptr::null(),
                 ptr::null(),
-                0,
+                1,
                 CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                 environment.as_ptr().cast(),
                 wide(&bundle).as_ptr(),
@@ -339,6 +354,7 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u16, PathBu
     (
         Handle(process.hProcess),
         process.dwProcessId,
+        process.dwThreadId,
         port,
         application,
     )
@@ -374,7 +390,9 @@ fn registration_under_standard_account() {
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
-        let (application_process, pid, port, application) = native_application(staged, &paths);
+        let (application_process, pid, thread, port, application) =
+            native_application(staged, &paths);
+        let startup = startup::sample(staged.to_owned(), application.clone(), thread);
         let result = output(
             Command::new(python)
                 .arg(staged.join("windows-signing.py"))
@@ -390,6 +408,7 @@ fn registration_under_standard_account() {
                 .env("PATH", paths),
             240,
         );
+        startup.join().unwrap();
         assert_eq!(
             unsafe { WaitForSingleObject(application_process.0, 10_000) },
             WAIT_OBJECT_0,
@@ -624,7 +643,13 @@ fn registration_under_standard_account() {
         }
     }
     drop(job);
-    for name in ["result.json", "child.log", "native-signing.log"] {
+    for name in [
+        "result.json",
+        "child.log",
+        "native-signing.log",
+        "native-application.log",
+        "startup.json",
+    ] {
         if temporary.path().join(name).exists() {
             fs::copy(temporary.path().join(name), evidence.join(name)).unwrap();
         }
