@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import hashlib
+import http.client
 import json
 from pathlib import Path
 import platform
@@ -136,9 +137,21 @@ def main():
         except Exception as error:
             result["error"] = repr(error)
             ImageGrab.grab(all_screens=True).save(args.output / "failure-desktop.png")
-            query = "Get-CimInstance Win32_Process | Where-Object Name -eq 'msedgewebview2.exe' | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json"
+            endpoint = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+            try:
+                endpoint.request("GET", "/json/version")
+                response = endpoint.getresponse()
+                details = json.loads(response.read())
+                result["startup_webview"] = {"status": response.status, "browser": details.get("Browser")}
+            except (OSError, ValueError, http.client.HTTPException) as endpoint_error:
+                result["startup_webview"] = {"error": type(endpoint_error).__name__}
+            finally:
+                endpoint.close()
+            pid = process.pid if process is not None else 0
+            query = f"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'msedgewebview2.exe' -or $_.ParentProcessId -eq {pid} -or $_.ProcessId -eq {pid} }} | Select-Object ProcessId,ParentProcessId,Name,SessionId | ConvertTo-Json"
             snapshot = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
                                       capture_output=True, text=True, timeout=15)
+            result["process_query_exit"] = snapshot.returncode
             (args.output / "webview-processes.json").write_text(snapshot.stdout)
             raise
         finally:

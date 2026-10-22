@@ -10,6 +10,34 @@ use windows_sys::Win32::System::{
         GetProcessWindowStation, GetThreadDesktop, GetUserObjectInformationW, UOI_NAME,
     },
 };
+use windows_sys::Win32::{
+    Foundation::{HWND, LPARAM},
+    UI::WindowsAndMessaging::{EnumThreadWindows, GetClassNameW, GetWindowTextW, IsWindowVisible},
+};
+
+unsafe extern "system" fn window_metadata(window: HWND, context: LPARAM) -> i32 {
+    let items = unsafe { &mut *(context as *mut Vec<Value>) };
+    let mut class = [0u16; 128];
+    let count = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
+    let mut title = [0u16; 128];
+    let title_count = unsafe { GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32) };
+    items.push(json!({"class":String::from_utf16_lossy(&class[..count.max(0) as usize]),
+        "visible":unsafe {IsWindowVisible(window)}!=0,
+        "firmica_title":String::from_utf16_lossy(&title[..title_count.max(0) as usize])=="Firmica"}));
+    1
+}
+
+fn windows(thread: u32) -> Value {
+    let mut items = Vec::<Value>::new();
+    unsafe {
+        EnumThreadWindows(
+            thread,
+            Some(window_metadata),
+            (&mut items as *mut Vec<Value>) as isize,
+        );
+    }
+    json!(items)
+}
 
 fn object_name(handle: HANDLE) -> Option<String> {
     let mut name = [0u16; 256];
@@ -61,7 +89,7 @@ fn wait_chain(thread: u32) -> Value {
             let owner = unsafe { node.Anonymous.ThreadObject };
             item["process"] = json!(owner.ProcessId);
             item["thread"] = json!(owner.ThreadId);
-            item["wait_ms"] = json!(owner.WaitTime);
+            item["wait_time"] = json!(owner.WaitTime);
         }
         item
     }).collect::<Vec<_>>()})
@@ -79,6 +107,7 @@ pub(super) fn sample(
         let report = json!({
             "window_station":object_name(unsafe { GetProcessWindowStation() }),
             "application_desktop":object_name(unsafe { GetThreadDesktop(thread) }),
+            "application_windows":windows(thread),
             "wait_chain":chain,
             "warm_launch_exit":probe.as_ref().ok().and_then(|result|result.status.code()),
             "warm_launch_error":probe.err().map(|error|format!("{:?}",error.kind()))
