@@ -17,15 +17,22 @@ use windows_sys::Win32::{
     },
     Security::{
         Authorization::ConvertSidToStringSidW,
-        CreateWellKnownSid,
+        CopySid, CreateWellKnownSid,
         Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG},
         GetTokenInformation, LookupAccountNameW, LookupAccountSidW, TokenElevationType,
-        TokenElevationTypeDefault, WinBuiltinUsersSid, TOKEN_QUERY,
+        TokenElevationTypeDefault, TokenLogonSid, WinBuiltinUsersSid, TOKEN_GROUPS, TOKEN_QUERY,
     },
-    System::Threading::{
-        CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-        TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, LOGON_WITH_PROFILE,
-        PROCESS_INFORMATION, STARTUPINFOW,
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
+        Threading::{
+            CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
+            ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW,
+            CREATE_SUSPENDED, LOGON_WITH_PROFILE, PROCESS_INFORMATION, STARTUPINFOW,
+        },
     },
     UI::Shell::DeleteProfileW,
 };
@@ -183,6 +190,43 @@ fn assert_standard_token() {
     assert_eq!(denied.code().0 as u32, 0x80070005);
 }
 
+fn process_logon_sid(process: HANDLE) -> [usize; 16] {
+    let mut token = ptr::null_mut();
+    assert_ne!(
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) },
+        0
+    );
+    let token = Handle(token);
+    let mut groups = [0usize; 32];
+    let mut needed = 0;
+    assert_ne!(
+        unsafe {
+            GetTokenInformation(
+                token.0,
+                TokenLogonSid,
+                groups.as_mut_ptr().cast(),
+                mem::size_of_val(&groups) as u32,
+                &mut needed,
+            )
+        },
+        0
+    );
+    let groups = unsafe { &*groups.as_ptr().cast::<TOKEN_GROUPS>() };
+    assert_eq!(groups.GroupCount, 1);
+    let mut sid = [0usize; 16];
+    assert_ne!(
+        unsafe {
+            CopySid(
+                mem::size_of_val(&sid) as u32,
+                sid.as_mut_ptr().cast(),
+                groups.Groups[0].Sid,
+            )
+        },
+        0
+    );
+    sid
+}
+
 fn copy_bundle(source: &Path, destination: &Path) {
     fs::create_dir(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -295,6 +339,11 @@ fn registration_under_standard_account() {
         .prefix("firmica-standard-")
         .tempdir_in(std::env::var_os("PUBLIC").expect("PUBLIC"))
         .unwrap();
+    let evidence = support::root().join(".test-artifacts/windows-standard-account");
+    if evidence.exists() {
+        fs::remove_dir_all(&evidence).unwrap();
+    }
+    fs::create_dir_all(&evidence).unwrap();
     let nonce = temporary.path().file_name().unwrap().to_string_lossy();
     let name = format!("Firmica{}", nonce.trim_start_matches("firmica-standard-"));
     let mut random = [0u8; 32];
@@ -410,6 +459,22 @@ fn registration_under_standard_account() {
     let mut command = wide(format!("\"{}\" --exact windows_standard_account::registration_under_standard_account --ignored --nocapture", temporary.path().join("registration-tests.exe").display()));
     let station = desktop_access::DesktopAccess::grant(&mut sid, true);
     let desktop = desktop_access::DesktopAccess::grant(&mut sid, false);
+    // A timed-out GUI driver must not leave an application holding this profile open.
+    let job = Handle(unsafe { CreateJobObjectW(ptr::null(), ptr::null()) });
+    assert!(!job.0.is_null());
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    assert_ne!(
+        unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                mem::size_of_val(&limits) as u32,
+            )
+        },
+        0
+    );
     let mut desktop_name = wide(r"WinSta0\Default");
     let startup = STARTUPINFOW {
         cb: mem::size_of::<STARTUPINFOW>() as u32,
@@ -427,7 +492,7 @@ fn registration_under_standard_account() {
             LOGON_WITH_PROFILE,
             application.as_ptr(),
             command.as_mut_ptr(),
-            CREATE_NO_WINDOW,
+            CREATE_NO_WINDOW | CREATE_SUSPENDED,
             ptr::null(),
             directory.as_ptr(),
             &startup,
@@ -444,6 +509,19 @@ fn registration_under_standard_account() {
     account.logged_on = true;
     let process_handle = Handle(process.hProcess);
     let thread_handle = Handle(process.hThread);
+    let assigned = unsafe { AssignProcessToJobObject(job.0, process_handle.0) };
+    if assigned == 0 {
+        unsafe {
+            TerminateProcess(process_handle.0, 1);
+            WaitForSingleObject(process_handle.0, 10_000);
+        }
+    }
+    assert_ne!(assigned, 0, "cannot supervise the disposable process tree");
+    // Match an interactive logon: grant this logon's SID before GUI children start.
+    let mut logon_sid = process_logon_sid(process_handle.0);
+    let logon_station = desktop_access::DesktopAccess::grant(&mut logon_sid, true);
+    let logon_desktop = desktop_access::DesktopAccess::grant(&mut logon_sid, false);
+    assert_ne!(unsafe { ResumeThread(thread_handle.0) }, u32::MAX);
     let waited = unsafe { WaitForSingleObject(process_handle.0, 400_000) };
     if waited != WAIT_OBJECT_0 {
         let _ = output(
@@ -460,8 +538,7 @@ fn registration_under_standard_account() {
             WaitForSingleObject(process_handle.0, 10_000);
         }
     }
-    let evidence = support::root().join(".test-artifacts/windows-standard-account");
-    fs::create_dir_all(&evidence).unwrap();
+    drop(job);
     for name in ["result.json", "child.log", "native-signing.log"] {
         if temporary.path().join(name).exists() {
             fs::copy(temporary.path().join(name), evidence.join(name)).unwrap();
@@ -480,6 +557,8 @@ fn registration_under_standard_account() {
     );
     drop(thread_handle);
     drop(process_handle);
+    drop(logon_desktop);
+    drop(logon_station);
     drop(desktop);
     drop(station);
     assert_eq!(waited, WAIT_OBJECT_0, "standard-account test timed out");

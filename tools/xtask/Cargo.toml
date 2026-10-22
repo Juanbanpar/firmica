@@ -25,4 +25,4 @@ base64 = "0.22"
 [target.'cfg(windows)'.dev-dependencies]
 openssl.workspace = true
 windows-registry = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Threading", "Win32_System_StationsAndDesktops", "Win32_NetworkManagement_NetManagement"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_StationsAndDesktops", "Win32_NetworkManagement_NetManagement"] }
