@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".test-artifacts/windows-signing"))
+    parser.add_argument("--require-standard-account", action="store_true")
     args = parser.parse_args()
     if platform.system() != "Windows":
         parser.error("this test requires a native Windows desktop session")
@@ -30,7 +31,11 @@ def main():
 
     app = args.app.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=True)
-    result = {"platform": platform.platform(), "passed": False, "checks": []}
+    import ctypes
+    administrator = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    if args.require_standard_account:
+        assert not administrator, "native signing must run as the standard account"
+    result = {"platform": platform.platform(), "administrator": administrator, "passed": False, "checks": []}
     password = "synthetic-desktop-password"
     content = b"Windows frozen signing\x00\xff\r\n"
     process = None

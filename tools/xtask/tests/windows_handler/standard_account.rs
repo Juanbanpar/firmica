@@ -1,4 +1,6 @@
 //! A fresh logon and HKCU hive, not a filtered administrator token.
+#[path = "desktop_access.rs"]
+mod desktop_access;
 use super::*;
 use std::{
     ffi::OsStr,
@@ -224,7 +226,7 @@ fn packaged_registration(staged: &Path) {
 }
 
 #[test]
-#[ignore = "creates a disposable standard Windows account and loads its profile; requires an administrator test host"]
+#[ignore = "requires a disposable administrator desktop, Python native UI tooling and a built portable app; creates a standard account/profile"]
 fn registration_under_standard_account() {
     let executable = std::env::current_exe().unwrap();
     let staged = executable.parent().unwrap();
@@ -240,9 +242,47 @@ fn registration_under_standard_account() {
             Some(&staged.join("standard-account.fixture.exe")),
         );
         packaged_registration(staged);
+        let tools: serde_json::Value =
+            serde_json::from_slice(&fs::read(staged.join("tools.json")).unwrap()).unwrap();
+        let python = Path::new(tools["python"].as_str().unwrap());
+        let openssl = Path::new(tools["openssl"].as_str().unwrap());
+        let paths = std::env::join_paths(
+            [
+                openssl.parent().unwrap().to_owned(),
+                python.parent().unwrap().to_owned(),
+            ]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let result = output(
+            Command::new(python)
+                .arg(staged.join("windows-signing.py"))
+                .arg("--app")
+                .arg(staged.join("Bundle space & 'apostrophe'/firmica.exe"))
+                .arg("--output")
+                .arg(staged.join("native-signing"))
+                .arg("--require-standard-account")
+                .env("PATH", paths),
+            240,
+        );
+        fs::write(
+            staged.join("native-signing.log"),
+            [&result.stdout[..], &result.stderr[..]].concat(),
+        )
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "standard-account native signing failed; see native-signing.log"
+        );
+        let signed: serde_json::Value =
+            serde_json::from_slice(&fs::read(staged.join("native-signing/result.json")).unwrap())
+                .unwrap();
+        assert_eq!(signed["passed"], true);
+        assert_eq!(signed["administrator"], false);
         support::report(
             &staged.join("result.json"),
-            &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"packaged_tls_and_registration":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
+            &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"packaged_tls_and_registration":true,"interactive_signing":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
         );
         return;
     }
@@ -339,6 +379,24 @@ fn registration_under_standard_account() {
         packaged.parent().unwrap(),
         &temporary.path().join("Bundle space & 'apostrophe'"),
     );
+    for script in ["windows-signing.py", "windows_gui.py"] {
+        fs::copy(
+            support::root().join("tests/interop").join(script),
+            temporary.path().join(script),
+        )
+        .unwrap();
+    }
+    let python = checked(
+        Command::new("python").args(["-c", "import sys; print(sys.executable)"]),
+        15,
+    );
+    let openssl = checked(Command::new("where.exe").arg("openssl"), 15);
+    fs::write(
+        temporary.path().join("tools.json"),
+        serde_json::json!({"python":python.trim(),"openssl":openssl.lines().next().unwrap()})
+            .to_string(),
+    )
+    .unwrap();
     checked(
         Command::new("icacls.exe").arg(temporary.path()).args([
             "/T",
@@ -350,8 +408,12 @@ fn registration_under_standard_account() {
     let application = wide(&application);
     let directory = wide(temporary.path());
     let mut command = wide(format!("\"{}\" --exact windows_standard_account::registration_under_standard_account --ignored --nocapture", temporary.path().join("registration-tests.exe").display()));
+    let station = desktop_access::DesktopAccess::grant(&mut sid, true);
+    let desktop = desktop_access::DesktopAccess::grant(&mut sid, false);
+    let mut desktop_name = wide(r"WinSta0\Default");
     let startup = STARTUPINFOW {
         cb: mem::size_of::<STARTUPINFOW>() as u32,
+        lpDesktop: desktop_name.as_mut_ptr(),
         ..Default::default()
     };
     let mut process = PROCESS_INFORMATION::default();
@@ -382,8 +444,17 @@ fn registration_under_standard_account() {
     account.logged_on = true;
     let process_handle = Handle(process.hProcess);
     let thread_handle = Handle(process.hThread);
-    let waited = unsafe { WaitForSingleObject(process_handle.0, 180_000) };
+    let waited = unsafe { WaitForSingleObject(process_handle.0, 400_000) };
     if waited != WAIT_OBJECT_0 {
+        let _ = output(
+            Command::new("taskkill.exe").args([
+                "/F",
+                "/T",
+                "/PID",
+                &process.dwProcessId.to_string(),
+            ]),
+            15,
+        );
         unsafe {
             TerminateProcess(process_handle.0, 1);
             WaitForSingleObject(process_handle.0, 10_000);
@@ -391,10 +462,16 @@ fn registration_under_standard_account() {
     }
     let evidence = support::root().join(".test-artifacts/windows-standard-account");
     fs::create_dir_all(&evidence).unwrap();
-    for name in ["result.json", "child.log"] {
+    for name in ["result.json", "child.log", "native-signing.log"] {
         if temporary.path().join(name).exists() {
             fs::copy(temporary.path().join(name), evidence.join(name)).unwrap();
         }
+    }
+    if temporary.path().join("native-signing").exists() {
+        copy_bundle(
+            &temporary.path().join("native-signing"),
+            &evidence.join("native-signing"),
+        );
     }
     let mut exit = 1;
     assert_ne!(
@@ -403,6 +480,8 @@ fn registration_under_standard_account() {
     );
     drop(thread_handle);
     drop(process_handle);
+    drop(desktop);
+    drop(station);
     assert_eq!(waited, WAIT_OBJECT_0, "standard-account test timed out");
     assert_eq!(
         exit, 0,
