@@ -219,8 +219,8 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
             automation = Application(backend="win32").connect(process=pid)
             native_browser, native_page = windows_gui.connect(playwright, port, observed, evidence)
             query = f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
-            evidence["launch_command"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
-            assert "--tls-cert" not in evidence["launch_command"] and "--tls-key" not in evidence["launch_command"]
+            launch_command = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
+            assert "--tls-cert" not in launch_command and "--tls-key" not in launch_command
             evidence["checks"].append("Firefox cold-launches the registered app and its automatically loaded private TLS profile")
             print("Registered handler cold-launched the native application", flush=True)
             for scenario in ("rsa", "cancel", "ec", "protocol41-rsa", "protocol41-cancel", "protocol41-ec", "protocol41-worker-failure"):
@@ -340,8 +340,9 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
             ImageGrab.grab(all_screens=True).save(options.output / "failure-desktop.png")
             if browser is not None:
                 try:
-                    evidence["browser_result"] = browser_page.evaluate("window.result")
-                    evidence["frames"] = [(direction, url, payload if isinstance(payload, str) else repr(payload)) for direction, url, payload in frames]
+                    response = browser_page.evaluate("window.result") or {}
+                    evidence["browser_result"] = {"received": bool(response), "has_signature": "signature" in response, "has_certificate": "certificate" in response}
+                    evidence["frames"] = [{"direction": direction, "port": urlsplit(url).port, "bytes": len(payload)} for direction, url, payload in frames]
                     browser_page.screenshot(path=str(options.output / "failure-browser.png"), full_page=True)
                 except Exception:
                     pass
