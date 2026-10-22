@@ -327,12 +327,13 @@ fn registration_under_standard_account() {
     )
     .unwrap();
     compile_fixture(&temporary.path().join("standard-account.fixture.exe"));
-    let packaged = PathBuf::from(
-        std::env::var_os("FIRMICA_TEST_APP")
-            .expect("FIRMICA_TEST_APP must point to a built portable firmica.exe"),
-    )
-    .canonicalize()
-    .unwrap();
+    let packaged = support::root()
+        .join(
+            std::env::var_os("FIRMICA_TEST_APP")
+                .expect("FIRMICA_TEST_APP must point to a built portable firmica.exe"),
+        )
+        .canonicalize()
+        .unwrap();
     assert!(packaged.is_file());
     copy_bundle(
         packaged.parent().unwrap(),
