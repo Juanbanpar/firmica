@@ -181,6 +181,48 @@ fn assert_standard_token() {
     assert_eq!(denied.code().0 as u32, 0x80070005);
 }
 
+fn copy_bundle(source: &Path, destination: &Path) {
+    fs::create_dir(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let kind = entry.file_type().unwrap();
+        let target = destination.join(entry.file_name());
+        if kind.is_dir() {
+            copy_bundle(&entry.path(), &target);
+        } else {
+            assert!(kind.is_file(), "bundle contains a nonregular entry");
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+fn packaged_registration(staged: &Path) {
+    let bundle = staged.join("Bundle space & 'apostrophe'");
+    let application = bundle.join("firmica.exe");
+    let script = bundle.join("handler.ps1");
+    let _cleanup = Registration { machine: false };
+    checked(
+        Command::new(&application).args(["tls", "init", "--origin", "https://example.invalid"]),
+        30,
+    );
+    let profile =
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("firmica-config/browser-tls");
+    assert!(profile.join("private-key.pem").is_file());
+    checked(Command::new(&application).args(["tls", "status"]), 30);
+    invoke(&script, "Install", &[], true);
+    assert!(invoke(&script, "Status", &[], true).contains("Registered executable:"));
+    let command = read(&format!(r"{}\shell\open\command", KEYS[1]), "");
+    let arguments = parse_command(&command.replace("%1", "afirma://save?ver=4.1"));
+    assert_eq!(
+        PathBuf::from(&arguments[0]).canonicalize().unwrap(),
+        application.canonicalize().unwrap()
+    );
+    assert_eq!(&arguments[1..], &["--", "afirma://save?ver=4.1"]);
+    invoke(&script, "Uninstall", &[], true);
+    assert!(invoke(&script, "Status", &[], true).contains("not registered"));
+    assert!(!KEYS.iter().any(|path| exists(path)));
+}
+
 #[test]
 #[ignore = "creates a disposable standard Windows account and loads its profile; requires an administrator test host"]
 fn registration_under_standard_account() {
@@ -197,9 +239,10 @@ fn registration_under_standard_account() {
             &staged.join("handler.ps1"),
             Some(&staged.join("standard-account.fixture.exe")),
         );
+        packaged_registration(staged);
         support::report(
             &staged.join("result.json"),
-            &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
+            &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"packaged_tls_and_registration":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
         );
         return;
     }
@@ -276,12 +319,6 @@ fn registration_under_standard_account() {
         status == 0 || status == 1378,
         "could not add account to Users: {status}"
     );
-    checked(
-        Command::new("icacls.exe")
-            .arg(temporary.path())
-            .args(["/grant:r", &format!("{name}:(OI)(CI)F")]),
-        15,
-    );
     let application = temporary.path().join("registration-tests.exe");
     fs::copy(&executable, &application).unwrap();
     fs::copy(
@@ -290,6 +327,25 @@ fn registration_under_standard_account() {
     )
     .unwrap();
     compile_fixture(&temporary.path().join("standard-account.fixture.exe"));
+    let packaged = PathBuf::from(
+        std::env::var_os("FIRMICA_TEST_APP")
+            .expect("FIRMICA_TEST_APP must point to a built portable firmica.exe"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert!(packaged.is_file());
+    copy_bundle(
+        packaged.parent().unwrap(),
+        &temporary.path().join("Bundle space & 'apostrophe'"),
+    );
+    checked(
+        Command::new("icacls.exe").arg(temporary.path()).args([
+            "/T",
+            "/grant:r",
+            &format!("{name}:(OI)(CI)F"),
+        ]),
+        15,
+    );
     let application = wide(&application);
     let directory = wide(temporary.path());
     let mut command = wide(format!("\"{}\" --exact windows_standard_account::registration_under_standard_account --ignored --nocapture", temporary.path().join("registration-tests.exe").display()));

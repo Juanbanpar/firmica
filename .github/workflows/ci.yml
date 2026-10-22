@@ -89,9 +89,6 @@ jobs:
           "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
       - run: cargo +stable test --locked -p xtask
       - run: cargo +stable clippy --locked -p xtask --all-targets -- -D warnings
-      - name: Verify per-user Windows handler registration
-        if: runner.os == 'Windows'
-        run: cargo +stable test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
       - name: Install verified Dioxus CLI 0.7.10
         run: cargo xtask install-dx
       - name: Build desktop application
@@ -100,6 +97,11 @@ jobs:
       - name: Build Windows portable application and native worker
         if: runner.os == 'Windows'
         run: cargo xtask bundle --debug
+      - name: Verify per-user Windows handler registration
+        if: runner.os == 'Windows'
+        env:
+          FIRMICA_TEST_APP: target/dx/firmica/debug/windows/app/firmica.exe
+        run: cargo +stable test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
       # Generates mobile assets and checks its host entry point; not a native mobile build.
       - run: dx build --locked --package mobile --platform desktop --features mobile
       - run: cargo +stable test --locked -p desktop -p mobile
