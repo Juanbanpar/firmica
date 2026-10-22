@@ -149,3 +149,11 @@ class ObservedProcess:
         if self.handle:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
+
+    def wait(self, timeout):
+        result = self.kernel.WaitForSingleObject(self.handle, int(timeout * 1000))
+        if result == 258:
+            raise TimeoutError("native process did not exit")
+        if result != 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return self.poll()

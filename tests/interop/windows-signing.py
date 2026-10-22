@@ -21,7 +21,11 @@ def main():
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".test-artifacts/windows-signing"))
     parser.add_argument("--require-standard-account", action="store_true")
+    parser.add_argument("--attach-pid", type=int)
+    parser.add_argument("--debug-port", type=int)
     args = parser.parse_args()
+    if bool(args.attach_pid) != bool(args.debug_port):
+        parser.error("--attach-pid and --debug-port must be supplied together")
     if platform.system() != "Windows":
         parser.error("this test requires a native Windows desktop session")
     # Imported only on the supported host; production never enables inspection.
@@ -41,9 +45,10 @@ def main():
     process = None
     with tempfile.TemporaryDirectory(prefix="firmica-signing-") as temporary, (args.output / "application.log").open("w") as log, contextlib.ExitStack() as cleanup:
         directory = Path(temporary)
-        copied = directory / "application"
-        shutil.copytree(app.parent, copied)
-        app = (copied / app.name).rename(copied / f"firmica-qa-{uuid.uuid4().hex}.exe")
+        if args.attach_pid is None:
+            copied = directory / "application"
+            shutil.copytree(app.parent, copied)
+            app = (copied / app.name).rename(copied / f"firmica-qa-{uuid.uuid4().hex}.exe")
         document = directory / "document.bin"
         document.write_bytes(content)
         for algorithm in ("rsa", "ec"):
@@ -59,10 +64,10 @@ def main():
                 "-in", str(directory / f"{algorithm}.pem"), "-out", str(directory / f"{algorithm}.p12"),
                 "-passout", f"pass:{password}",
             ], check=True, capture_output=True, timeout=30)
-        port = free_port()
+        port = args.debug_port or free_port()
         environment = cleanup.enter_context(windows_gui.debugging(app, port, directory))
         try:
-            process = subprocess.Popen([str(app)], env=environment, stdout=log, stderr=log)
+            process = windows_gui.ObservedProcess(args.attach_pid) if args.attach_pid else subprocess.Popen([str(app)], env=environment, stdout=log, stderr=log)
             wait_for(lambda: windows_for(process.pid), process)
             automation = Application(backend="win32").connect(process=process.pid)
             with sync_playwright() as playwright:
@@ -157,6 +162,8 @@ def main():
                             raise
                         time.sleep(0.1)
             (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+            if args.attach_pid and process is not None:
+                process.close()
     print(json.dumps(result, indent=2))
 
 

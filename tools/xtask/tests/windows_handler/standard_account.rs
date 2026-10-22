@@ -29,9 +29,10 @@ use windows_sys::Win32::{
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
         Threading::{
-            CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-            ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW,
-            CREATE_SUSPENDED, LOGON_WITH_PROFILE, PROCESS_INFORMATION, STARTUPINFOW,
+            CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess,
+            OpenProcessToken, ResumeThread, TerminateProcess, WaitForSingleObject,
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, LOGON_WITH_PROFILE,
+            PROCESS_INFORMATION, STARTUPINFOW,
         },
     },
     UI::Shell::DeleteProfileW,
@@ -269,6 +270,80 @@ fn packaged_registration(staged: &Path) {
     assert!(!KEYS.iter().any(|path| exists(path)));
 }
 
+fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u16, PathBuf) {
+    let bundle = staged.join("Bundle space & 'apostrophe'");
+    let application = bundle.join(format!("firmica-qa-{}.exe", std::process::id()));
+    fs::rename(bundle.join("firmica.exe"), &application).unwrap();
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut environment: Vec<_> = std::env::vars()
+        .filter(|(name, _)| {
+            ![
+                "PATH",
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "WEBVIEW2_USER_DATA_FOLDER",
+            ]
+            .iter()
+            .any(|key| name.eq_ignore_ascii_case(key))
+        })
+        .collect();
+    environment.extend([
+        ("PATH".into(), paths.to_str().unwrap().into()),
+        (
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
+            format!("--remote-debugging-port={port}"),
+        ),
+        (
+            "WEBVIEW2_USER_DATA_FOLDER".into(),
+            staged.join("standard-webview").to_str().unwrap().into(),
+        ),
+    ]);
+    environment.sort_by_cached_key(|(name, _)| name.to_ascii_uppercase());
+    let environment: Vec<u16> = environment
+        .into_iter()
+        .flat_map(|(name, value)| wide(format!("{name}={value}")))
+        .chain(Some(0))
+        .collect();
+    let mut desktop = wide(r"WinSta0\Default");
+    let startup = STARTUPINFOW {
+        cb: mem::size_of::<STARTUPINFOW>() as u32,
+        lpDesktop: desktop.as_mut_ptr(),
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    let mut command = wide(format!("\"{}\"", application.display()));
+    // Keep the GUI in the explicitly selected desktop of the fresh logon. Python
+    // attaches to this process; its subprocess launcher does not expose lpDesktop.
+    assert_ne!(
+        unsafe {
+            CreateProcessW(
+                wide(&application).as_ptr(),
+                command.as_mut_ptr(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                environment.as_ptr().cast(),
+                wide(&bundle).as_ptr(),
+                &startup,
+                &mut process,
+            )
+        },
+        0,
+        "cannot launch the standard-user application on the interactive desktop"
+    );
+    drop(Handle(process.hThread));
+    (
+        Handle(process.hProcess),
+        process.dwProcessId,
+        port,
+        application,
+    )
+}
+
 #[test]
 #[ignore = "requires a disposable administrator desktop, Python native UI tooling and a built portable app; creates a standard account/profile"]
 fn registration_under_standard_account() {
@@ -299,16 +374,26 @@ fn registration_under_standard_account() {
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
+        let (application_process, pid, port, application) = native_application(staged, &paths);
         let result = output(
             Command::new(python)
                 .arg(staged.join("windows-signing.py"))
                 .arg("--app")
-                .arg(staged.join("Bundle space & 'apostrophe'/firmica.exe"))
+                .arg(application)
+                .arg("--attach-pid")
+                .arg(pid.to_string())
+                .arg("--debug-port")
+                .arg(port.to_string())
                 .arg("--output")
                 .arg(staged.join("native-signing"))
                 .arg("--require-standard-account")
                 .env("PATH", paths),
             240,
+        );
+        assert_eq!(
+            unsafe { WaitForSingleObject(application_process.0, 10_000) },
+            WAIT_OBJECT_0,
+            "native GUI driver did not stop the standard-user application"
         );
         fs::write(
             staged.join("native-signing.log"),
