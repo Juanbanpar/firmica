@@ -15,7 +15,7 @@ permissions:
 jobs:
   native:
     runs-on: windows-latest
-    timeout-minutes: 22
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -29,7 +29,7 @@ jobs:
           $source = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" --jq '.head_sha'
           if ($LASTEXITCODE -ne 0) { throw 'cannot resolve artifact revision' }
           # This replay may change tests, but must exercise the same application and builder.
-          git diff --exit-code $source HEAD -- Cargo.toml Cargo.lock packages crates .cargo tools/xtask tools/windows
+          git diff --exit-code $source HEAD -- Cargo.toml Cargo.lock packages crates .cargo tools/xtask/Cargo.toml tools/xtask/src tools/windows
           if ($LASTEXITCODE -ne 0) { throw 'bundle source differs from this checkout; rebuild it first' }
           gh run download $env:SOURCE_RUN --name windows-invocation --dir "$env:RUNNER_TEMP/source-artifact"
           if ($LASTEXITCODE -ne 0) { throw 'artifact download failed' }
@@ -40,10 +40,15 @@ jobs:
       - name: Install native UI test tooling
         run: python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
       - name: Exercise the extracted portable application
-        timeout-minutes: 18
+        timeout-minutes: 22
         shell: pwsh
         run: |
           $env:OPENSSL_DIR = Join-Path $env:ProgramFiles OpenSSL
+          $env:OPENSSL_LIB_DIR = Join-Path $env:OPENSSL_DIR 'lib\VC\x64\MD'
+          $env:OPENSSL_STATIC = '0'
+          $env:FIRMICA_TEST_APP = "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
+          cargo test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'standard-account registration or native signing failed' }
           python -u tests/interop/windows-signing.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
           if ($LASTEXITCODE -ne 0) { throw 'native signing test failed' }
           python -m playwright install firefox
@@ -58,5 +63,6 @@ jobs:
           path: |
             .test-artifacts/windows-signing/
             .test-artifacts/windows-browser/
+            .test-artifacts/windows-standard-account/
             bundle-source.txt
           if-no-files-found: warn
