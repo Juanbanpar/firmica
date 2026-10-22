@@ -1,4 +1,4 @@
-//! Private Linux profile storage.
+//! Private Unix profile storage.
 use super::*;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
@@ -7,12 +7,22 @@ use std::{
 };
 
 pub(super) fn config_base() -> Result<PathBuf, Error> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or(Error::Directory)?);
+        if !home.is_absolute() {
+            return Err(Error::Directory);
+        }
+        Ok(home.join("Library/Application Support"))
+    }
+    #[cfg(target_os = "linux")]
     config_home(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
     )
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn config_home(
     xdg: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
@@ -36,6 +46,16 @@ pub(super) fn check_directory(path: &Path, private: bool) -> Result<(), Error> {
     {
         return Err(Error::Permissions);
     }
+    #[cfg(target_os = "macos")]
+    if private {
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY).bits() as i32,
+            )
+            .open(path)?;
+        crate::private_fs::ensure_no_acl(&directory).map_err(|_| Error::Permissions)?;
+    }
     Ok(())
 }
 
@@ -54,6 +74,8 @@ pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
     if metadata.len() > MAX_FILE_BYTES {
         return Err(Error::Invalid);
     }
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::Permissions)?;
     let mut bytes = SecretBox::new(Box::new(Vec::new()));
     use secrecy::ExposeSecretMut;
     file.take(MAX_FILE_BYTES + 1)
@@ -70,6 +92,8 @@ pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .create_new(true)
         .mode(0o600)
         .open(path)?;
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::Permissions)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())

@@ -1,12 +1,12 @@
 use dioxus::prelude::*;
 
 #[component]
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn Home() -> Element {
     rsx! { ui::InvocationReview {} }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[derive(Clone, Copy, PartialEq)]
 pub enum BrowserCompletion {
     Sent,
@@ -15,7 +15,7 @@ pub enum BrowserCompletion {
     Expired,
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub struct BrowserOperation {
     generation: u64,
     pub request: firmica_protocol::signing::SignRequest,
@@ -23,7 +23,7 @@ pub struct BrowserOperation {
     pub reply: async_channel::Sender<firmica_core::ReviewOutcome>,
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[component]
 pub fn Home() -> Element {
     use firmica_core::{Inbox, ReviewOutcome};

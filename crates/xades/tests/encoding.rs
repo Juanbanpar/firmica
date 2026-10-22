@@ -52,7 +52,7 @@ fn xmlsec_verify(bytes: &[u8], certificate: &[u8]) -> bool {
         .current_dir(temp.path())
         .args([
             "--verify",
-            "--pubkey-cert-pem",
+            "--trusted-pem",
             "certificate.pem",
             "--enabled-reference-uris",
             "empty,same-doc",

@@ -20,10 +20,10 @@ tokio.workspace = true
 async-channel = "2"
 clap = { version = "4", features = ["derive"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "1", features = ["process", "fs"] }
 
-[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
 firmica-key-worker.workspace = true
 firmica-signing.workspace = true
 firmica-cades.workspace = true
@@ -42,7 +42,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(windows)'.dev-dependencies]
 tokio = { workspace = true, features = ["process"] }
 
-[target.'cfg(any(target_os = "linux", windows))'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dev-dependencies]
 base64 = "0.22"
 
 [features]

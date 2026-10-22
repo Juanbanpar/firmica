@@ -4,9 +4,11 @@ use ui::Navbar;
 use views::{Diagnostics, Home};
 
 mod invocation;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod local_tls;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "macos")]
+mod private_fs;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod signing;
 mod views;
 

@@ -1,0 +1,88 @@
+// Browser automation only: native review and dialogs are exercised by XCTest.
+import assert from 'node:assert/strict';
+import { firefox } from 'playwright';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { until } from '../native.mjs';
+const [origin, profile, configuration, evidence] = process.argv.slice(2);
+const get = async route => (await fetch(origin + route)).json();
+const config = await get('/config');
+await mkdir(profile, { recursive: true, mode: 0o700 });
+execFileSync('certutil', ['-N', '-d', `sql:${profile}`, '--empty-password']);
+execFileSync('certutil', ['-A', '-d', `sql:${profile}`, '-n', 'Firmica synthetic WSS', '-t', 'C,,', '-i', path.join(configuration, 'browser-tls/ca.pem')]);
+const prefs = {
+  'network.protocol-handler.external.afirma': true,
+  'network.protocol-handler.warn-external.afirma': false,
+  'network.protocol-handler.prompt-without-user-activation': false,
+  'security.enterprise_roots.enabled': false,
+};
+// Approve LaunchServices delivery only for this disposable browser profile.
+const policy = path.join(profile, 'policies.json');
+await writeFile(policy, JSON.stringify({ policies: {
+  Handlers: { schemes: { afirma: { action: 'useSystemDefault', ask: false } } },
+} }), { mode: 0o600 });
+let context;
+let untrusted;
+try {
+  await until(async () => (await get('/state')).local_done, 1500000);
+  console.log('Launching the trusted Firefox profile');
+  context = await firefox.launchPersistentContext(profile, { headless: false, firefoxUserPrefs: prefs,
+    timeout: 60000, env: { ...process.env, PLAYWRIGHT_FIREFOX_POLICIES_JSON: policy } });
+  console.log('Launching the fresh Firefox profile for trust isolation');
+  untrusted = await firefox.launchPersistentContext(profile + '-untrusted', {
+    headless: true, firefoxUserPrefs: prefs, timeout: 60000,
+  });
+  const fresh = await untrusted.newPage();
+  await get('/browser-ready');
+  console.log('Firefox profiles ready');
+  let rejected = false;
+  for (let index = 0; index < config.browser.length; index++) {
+    const scenario = config.browser[index];
+    console.log(`Starting browser case ${index}`);
+    let listener;
+    const page = await context.newPage();
+    page.on('websocket', socket => {
+      // AutoScript races several ports; only a received frame confirms the listener.
+      if (socket.url().startsWith('wss://127.0.0.1:')) {
+        socket.on('framereceived', () => { listener = socket.url(); });
+      }
+    });
+    await page.goto(origin);
+    await page.locator('#sign').click();
+    if (!rejected) {
+      await until(() => listener);
+      await assert.rejects(fresh.goto(listener.replace('wss:', 'https:')), /SEC_ERROR_UNKNOWN_ISSUER/);
+      rejected = true;
+      await untrusted.close();
+      untrusted = undefined;
+      console.log('The fresh profile rejected the signing listener certificate');
+    }
+    await get('/started');
+    if (index === 0) {
+      await until(async () => (await get('/state')).hidden, 45000);
+      await page.bringToFront();
+      await page.locator('#warm').click();
+      await get('/warm-delivered');
+    }
+    let result;
+    if (scenario.action === 'disconnect') {
+      await until(async () => (await get('/state')).prepared, 45000);
+      await page.close();
+      result = { disconnected: true };
+    } else {
+      await page.waitForFunction(() => window.result, undefined, { timeout: 60000 });
+      result = await page.evaluate(() => window.result);
+      await page.screenshot({ path: path.join(evidence, `firefox-${index}.png`) });
+      await page.close();
+    }
+    await writeFile(path.join(config.fixtures, `browser-${index}.json`), JSON.stringify(result), { mode: 0o600 });
+    await get('/result-received');
+    await until(async () => (await get('/state')).native_done, scenario.action === 'disconnect' ? 150000 : 30000);
+    await get('/next');
+  }
+  await writeFile(path.join(evidence, 'browser-checks.json'), JSON.stringify({ untrusted_profile_rejected: rejected, firefox: context.browser().version() }));
+} finally {
+  await untrusted?.close();
+  await context?.close();
+}

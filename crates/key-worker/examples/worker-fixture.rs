@@ -1,6 +1,6 @@
 //! Windows process-control regression fixture. Select a mode by copying this
 //! executable to `<mode>.exe`; no production worker or credential flow uses it.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() {}
 
 #[cfg(windows)]
@@ -112,4 +112,33 @@ fn main() {
         }
         _ => panic!("unknown Windows worker fixture"),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    use std::{
+        io::{self, Write},
+        time::Duration,
+    };
+    let executable = std::env::current_exe().unwrap();
+    std::fs::write(
+        executable.with_extension("pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    match executable.file_stem().unwrap().to_str().unwrap() {
+        "silent" => {}
+        "blocked" => {
+            io::stdout().write_all(b"\0\0\0\x07FRMKEY\x01").unwrap();
+        }
+        "malformed" => {
+            io::stdout().write_all(&u32::MAX.to_be_bytes()).unwrap();
+        }
+        "nonzero" => {
+            std::process::exit(1);
+        }
+        _ => panic!("unknown macOS pipe fixture"),
+    }
+    io::stdout().flush().unwrap();
+    std::thread::sleep(Duration::from_secs(60));
 }

@@ -69,7 +69,7 @@ use openssl::{
 use secrecy::ExposeSecret;
 use std::{collections::BTreeSet, fs, process::Command};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::{symlink, MetadataExt};
 
 const PASSWORD: &str = "synthetic test only";
@@ -96,7 +96,13 @@ fn bounded_reads_reject_nonregular_and_oversize_inputs() {
         read_bounded(&temp.path().join("absent"), 1024),
         Err(Error::ReadInput)
     ));
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "macos")]
+    {
+        let link = temp.path().join("document-link");
+        symlink(&path, &link).unwrap();
+        assert!(matches!(read_bounded(&link, 1024), Err(Error::ReadInput)));
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let fifo = temp.path().join("pipe");
         assert!(Command::new("mkfifo")
@@ -115,14 +121,14 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
     let target = temp.path().join("result.csig");
     save_new(&target, DOCUMENT, &active).unwrap();
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert_eq!(target.metadata().unwrap().mode() & 0o777, 0o600);
     assert!(matches!(
         save_new(&target, b"replacement", &active),
         Err(Error::DestinationExists)
     ));
     assert_eq!(fs::read(&target).unwrap(), DOCUMENT);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     for (name, destination) in [
         ("link", target.clone()),
         ("dangling", temp.path().join("absent")),
@@ -146,6 +152,25 @@ fn publication_is_private_and_never_overwrites_files_or_symlinks() {
         if cfg!(windows) { 1 } else { 3 },
         "temporary outputs must be removed"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn inherited_acl_access_prevents_signature_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(Command::new("/bin/chmod")
+        .args(["+a", "everyone allow read,file_inherit,directory_inherit"])
+        .arg(directory.path())
+        .status()
+        .unwrap()
+        .success());
+    let path = directory.path().join("signature.csig");
+    assert!(matches!(
+        save_new(&path, DOCUMENT, &AtomicBool::new(false)),
+        Err(Error::Save)
+    ));
+    assert!(!path.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
 fn fixture(directory: &Path, algorithm: SignatureAlgorithm, ca: bool) -> X509 {
@@ -243,6 +268,25 @@ fn children() -> BTreeSet<u32> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
+fn children() -> BTreeSet<u32> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm="])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let parent: u32 = fields.next()?.parse().ok()?;
+            (parent == std::process::id() && line.ends_with("/firmica-key-worker")).then_some(pid)
+        })
+        .collect()
+}
+
 #[cfg(windows)]
 fn children() -> BTreeSet<u32> {
     let query = format!(
@@ -291,7 +335,7 @@ fn worker_discovery_is_beside_the_application_and_rejects_nonfiles() {
     fs::remove_dir(&worker).unwrap();
     fs::write(&worker, b"synthetic worker").unwrap();
     assert_eq!(worker_beside(&application).unwrap(), worker);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&worker, fs::Permissions::from_mode(0o666)).unwrap();
@@ -422,7 +466,7 @@ fn worker_failure_blocks_publication_and_is_reaped() {
     let before = children();
     let pending = open(temp.path(), EC, ContentMode::Attached).unwrap();
     let pid = *children().difference(&before).next().unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     rustix::process::kill_process(
         rustix::process::Pid::from_raw(pid as i32).unwrap(),
         rustix::process::Signal::KILL,

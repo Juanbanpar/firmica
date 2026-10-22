@@ -2,7 +2,7 @@ use firmica_key_worker::{WorkerError, WorkerKey};
 use secrecy::{SecretBox, SecretString};
 use std::path::Path;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[test]
 fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert_eq!(
@@ -17,7 +17,7 @@ fn unsupported_platforms_reject_import_without_launching_a_worker() {
     assert!(firmica_key_worker::serve().is_err());
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod native {
     use super::*;
     use der::{Any, Decode, Encode, Sequence};
@@ -439,6 +439,50 @@ mod native {
         gone(pid);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "build --example worker-fixture before running the native pipe checks"]
+    fn macos_pipe_deadlines_and_malformed_replies_reap_the_worker() {
+        let fixture = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples/worker-fixture");
+        for (mode, expected) in [
+            ("silent", WorkerError::TimedOut),
+            ("blocked", WorkerError::TimedOut),
+            ("malformed", WorkerError::Protocol),
+            ("nonzero", WorkerError::Unavailable),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let launcher = directory.path().join(mode);
+            fs::copy(&fixture, &launcher).expect("build the worker-fixture example");
+            let start = Instant::now();
+            assert_eq!(
+                WorkerKey::import(
+                    &launcher,
+                    secret(vec![0; MAX_PKCS12_BYTES]),
+                    SecretString::from(PASSWORD)
+                )
+                .err(),
+                Some(expected)
+            );
+            assert!(start.elapsed() < OPERATION_TIMEOUT + std::time::Duration::from_secs(3));
+            let pid: i32 = fs::read_to_string(launcher.with_extension("pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            // SAFETY: signal zero checks existence without sending a signal.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+    }
+
     #[derive(Sequence)]
     struct Pfx {
         version: u8,
@@ -466,7 +510,7 @@ mod native {
             directory.path(),
             &format!("exec {} --stdio", quote(executable())),
         );
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let launcher = executable().to_path_buf();
         let start = Instant::now();
         assert!(matches!(

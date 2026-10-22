@@ -17,7 +17,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::File;
 
 const MAX_CONTAINER_BYTES: usize = 8 * 1024 * 1024;
@@ -56,7 +56,7 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(Error::MissingWorker);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::fs::MetadataExt;
         if metadata.mode() & 0o022 != 0
@@ -76,6 +76,16 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(Error::MissingWorker);
         }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(&path)
+            .map_err(|_| Error::MissingWorker)?;
+        crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::MissingWorker)?;
     }
     Ok(path)
 }
@@ -235,18 +245,15 @@ impl Drop for Prepared {
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use rustix::fs::{open, Mode, OFlags};
     // O_NONBLOCK lets us reject pipes/devices after open without hanging on a FIFO.
-    #[cfg(target_os = "linux")]
-    let mut file = File::from(
-        open(
-            path,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        )
-        .map_err(|_| Error::ReadInput)?,
-    );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK;
+    #[cfg(target_os = "macos")]
+    let flags = flags | OFlags::NOFOLLOW;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut file = File::from(open(path, flags, Mode::empty()).map_err(|_| Error::ReadInput)?);
     #[cfg(windows)]
     let mut file = {
         use std::os::windows::fs::OpenOptionsExt;
@@ -314,6 +321,8 @@ fn save_new(path: &Path, signature: &[u8], cancelled: &AtomicBool) -> Result<(),
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::Save)?;
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(temporary.as_file()).map_err(|_| Error::Save)?;
     temporary.write_all(signature).map_err(|_| Error::Save)?;
     temporary.as_file().sync_all().map_err(|_| Error::Save)?;
     if cancelled.load(Ordering::Acquire) {
