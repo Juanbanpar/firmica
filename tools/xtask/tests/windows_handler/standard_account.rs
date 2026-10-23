@@ -1,8 +1,6 @@
 //! A fresh logon and HKCU hive, not a filtered administrator token.
 #[path = "session_access.rs"]
 mod session_access;
-#[path = "startup.rs"]
-mod startup;
 use super::*;
 use std::{
     ffi::OsStr,
@@ -32,10 +30,10 @@ use windows_sys::Win32::{
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
         Threading::{
-            CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, GetExitCodeProcess,
-            OpenProcessToken, ResumeThread, TerminateProcess, WaitForSingleObject,
-            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, LOGON_WITH_PROFILE,
-            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+            CreateMutexW, CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess,
+            GetExitCodeProcess, OpenProcessToken, ResumeThread, TerminateProcess,
+            WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
+            LOGON_WITH_PROFILE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
         },
     },
     UI::Shell::DeleteProfileW,
@@ -255,6 +253,17 @@ fn process_session(process: HANDLE) -> u32 {
     session
 }
 
+fn assert_local_objects_available() {
+    let name = wide(format!(r"Local\Firmica-qa-{}", std::process::id()));
+    let handle = unsafe { CreateMutexW(ptr::null(), 0, name.as_ptr()) };
+    assert!(
+        !handle.is_null(),
+        "standard logon cannot create a local session object: {}",
+        std::io::Error::last_os_error()
+    );
+    drop(Handle(handle));
+}
+
 fn copy_bundle(source: &Path, destination: &Path) {
     fs::create_dir(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -297,7 +306,7 @@ fn packaged_registration(staged: &Path) {
     assert!(!KEYS.iter().any(|path| exists(path)));
 }
 
-fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
+fn native_application(staged: &Path) -> (Handle, u32, u16, PathBuf) {
     use std::os::windows::io::AsRawHandle;
     let bundle = staged.join("Bundle space & 'apostrophe'");
     let application = bundle.join(format!("firmica-qa-{}.exe", std::process::id()));
@@ -317,22 +326,11 @@ fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
             .any(|key| name.eq_ignore_ascii_case(key))
         })
         .collect();
-    environment.extend([(
+    // The disposable account already isolates Dioxus's normal per-user profile.
+    environment.push((
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
-        format!(
-            "--remote-debugging-port={port} --enable-logging --log-file=\"{}\"",
-            staged.join("browser-startup.log").display()
-        ),
-    )]);
-    // The account is disposable, so Dioxus's normal per-user profile is already
-    // isolated. Do not redirect WebView2 storage into the shared bundle staging area.
-    let profile = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
-        .join(application.file_stem().unwrap());
-    fs::write(
-        staged.join("application-profile.path"),
-        profile.to_str().unwrap(),
-    )
-    .unwrap();
+        format!("--remote-debugging-port={port}"),
+    ));
     environment.sort_by_cached_key(|(name, _)| name.to_ascii_uppercase());
     let environment: Vec<u16> = environment
         .into_iter()
@@ -380,15 +378,9 @@ fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
         "cannot launch the standard-user application on the interactive desktop"
     );
     drop(Handle(process.hThread));
-    fs::write(
-        staged.join("application.pid"),
-        process.dwProcessId.to_string(),
-    )
-    .unwrap();
     (
         Handle(process.hProcess),
         process.dwProcessId,
-        process.dwThreadId,
         port,
         application,
     )
@@ -406,6 +398,7 @@ fn registration_under_standard_account() {
             let _ = fs::write(&log, format!("{info}\n"));
         }));
         assert_standard_token();
+        assert_local_objects_available();
         registration_checks(
             &staged.join("handler.ps1"),
             Some(&staged.join("standard-account.fixture.exe")),
@@ -424,8 +417,7 @@ fn registration_under_standard_account() {
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
-        let (application_process, pid, thread, port, application) = native_application(staged);
-        let startup = startup::sample(staged.to_owned(), application.clone(), thread);
+        let (application_process, pid, port, application) = native_application(staged);
         let result = output(
             Command::new(python)
                 .arg(staged.join("windows-signing.py"))
@@ -441,7 +433,6 @@ fn registration_under_standard_account() {
                 .env("PATH", paths),
             240,
         );
-        startup.join().unwrap();
         assert_eq!(
             unsafe { WaitForSingleObject(application_process.0, 10_000) },
             WAIT_OBJECT_0,
@@ -660,7 +651,6 @@ fn registration_under_standard_account() {
     let logon_desktop = session_access::SessionAccess::grant(&mut logon_sid, false);
     let namespace =
         session_access::SessionAccess::namespace(&mut logon_sid, process_session(process_handle.0));
-    let trace = startup::Trace::start(temporary.path());
     assert_ne!(unsafe { ResumeThread(thread_handle.0) }, u32::MAX);
     let waited = unsafe { WaitForSingleObject(process_handle.0, 400_000) };
     if waited != WAIT_OBJECT_0 {
@@ -679,15 +669,11 @@ fn registration_under_standard_account() {
         }
     }
     drop(job);
-    if let Some(trace) = trace {
-        trace.finish(temporary.path(), &evidence);
-    }
     for name in [
         "result.json",
         "child.log",
         "native-signing.log",
         "native-application.log",
-        "startup.json",
     ] {
         if temporary.path().join(name).exists() {
             fs::copy(temporary.path().join(name), evidence.join(name)).unwrap();
@@ -704,9 +690,6 @@ fn registration_under_standard_account() {
         unsafe { GetExitCodeProcess(process_handle.0, &mut exit) },
         0
     );
-    if exit != 0 {
-        startup::host_events(&evidence);
-    }
     drop(thread_handle);
     drop(process_handle);
     drop(namespace);
