@@ -95,6 +95,26 @@ fn wait_chain(thread: u32) -> Value {
     }).collect::<Vec<_>>()})
 }
 
+fn singleton_access() -> Value {
+    use windows_sys::Win32::System::Threading::{OpenMutexW, MUTEX_ALL_ACCESS};
+    json!([
+        r"Local\ChromeProcessSingletonStartup!",
+        r"Local\MicrosoftEdgeProcessSingletonStartup!",
+        r"Local\MicrosoftEdgeWebViewProcessSingletonStartup!",
+    ]
+    .map(|name| {
+        // Opening an existing object only: never create it or alter its DACL.
+        let handle = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, 0, wide(name).as_ptr()) };
+        let error = if handle.is_null() {
+            std::io::Error::last_os_error().raw_os_error()
+        } else {
+            drop(Handle(handle));
+            Some(0)
+        };
+        json!({"name":name,"open_all_access_error":error})
+    }))
+}
+
 pub(super) fn sample(
     staged: PathBuf,
     application: PathBuf,
@@ -108,6 +128,7 @@ pub(super) fn sample(
             "window_station":object_name(unsafe { GetProcessWindowStation() }),
             "application_desktop":object_name(unsafe { GetThreadDesktop(thread) }),
             "application_windows":windows(thread),
+            "singleton_access":singleton_access(),
             "wait_chain":chain,
             "warm_launch_exit":probe.as_ref().ok().and_then(|result|result.status.code()),
             "warm_launch_error":probe.err().map(|error|format!("{:?}",error.kind()))
