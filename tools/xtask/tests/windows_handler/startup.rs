@@ -195,7 +195,7 @@ impl Trace {
 try {
 $application = [uint32](Get-Content -LiteralPath $env:FIRMICA_STARTUP_PID)
 $trace = [xml](Get-Content -LiteralPath $env:FIRMICA_STARTUP_TRACE -Raw -ErrorAction Stop)
-$profile = Join-Path (Split-Path $env:FIRMICA_STARTUP_PID) 'standard-webview'
+$profile = Get-Content -LiteralPath (Join-Path (Split-Path $env:FIRMICA_STARTUP_PID) 'application-profile.path')
 $profileArguments = @()
 $events = @($trace.SelectNodes('//*[local-name()="Event"]') |
     Where-Object { [uint32]$_.System.Execution.ProcessID -eq $application } | Select-Object -First 2000 | ForEach-Object {

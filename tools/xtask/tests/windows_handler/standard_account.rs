@@ -292,19 +292,22 @@ fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
             .any(|key| name.eq_ignore_ascii_case(key))
         })
         .collect();
-    environment.extend([
-        (
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
-            format!(
-                "--remote-debugging-port={port} --enable-logging --log-file=\"{}\"",
-                staged.join("browser-startup.log").display()
-            ),
+    environment.extend([(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
+        format!(
+            "--remote-debugging-port={port} --enable-logging --log-file=\"{}\"",
+            staged.join("browser-startup.log").display()
         ),
-        (
-            "WEBVIEW2_USER_DATA_FOLDER".into(),
-            staged.join("standard-webview").to_str().unwrap().into(),
-        ),
-    ]);
+    )]);
+    // The account is disposable, so Dioxus's normal per-user profile is already
+    // isolated. Do not redirect WebView2 storage into the shared bundle staging area.
+    let profile = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
+        .join(application.file_stem().unwrap());
+    fs::write(
+        staged.join("application-profile.path"),
+        profile.to_str().unwrap(),
+    )
+    .unwrap();
     environment.sort_by_cached_key(|(name, _)| name.to_ascii_uppercase());
     let environment: Vec<u16> = environment
         .into_iter()
