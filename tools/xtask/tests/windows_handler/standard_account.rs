@@ -295,7 +295,10 @@ fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
     environment.extend([
         (
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
-            format!("--remote-debugging-port={port}"),
+            format!(
+                "--remote-debugging-port={port} --enable-logging --log-file=\"{}\"",
+                staged.join("browser-startup.log").display()
+            ),
         ),
         (
             "WEBVIEW2_USER_DATA_FOLDER".into(),

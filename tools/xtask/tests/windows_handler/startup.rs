@@ -195,21 +195,36 @@ impl Trace {
 try {
 $application = [uint32](Get-Content -LiteralPath $env:FIRMICA_STARTUP_PID)
 $trace = [xml](Get-Content -LiteralPath $env:FIRMICA_STARTUP_TRACE -Raw -ErrorAction Stop)
+$profile = Join-Path (Split-Path $env:FIRMICA_STARTUP_PID) 'standard-webview'
+$profileArguments = @()
 $events = @($trace.SelectNodes('//*[local-name()="Event"]') |
     Where-Object { [uint32]$_.System.Execution.ProcessID -eq $application } | Select-Object -First 2000 | ForEach-Object {
         $xml = $_
         $fields = @($xml.SelectNodes('.//*[local-name()="EventData" or local-name()="UserData"]//*[not(*)]') | ForEach-Object {
             $value = $_.InnerText
+            if ($_.GetAttribute('Name') -eq 'command line') {
+                $script:profileArguments += ($value -match [regex]::Escape($profile))
+            }
             # Preserve numeric results and short diagnostic labels. Never retain
             # paths, URLs, command lines or arbitrary encoded payloads.
-            if ($value -notmatch '^(0x[0-9a-fA-F]+|[0-9]+|[A-Za-z_][A-Za-z_ .:()0-9-]{0,159})$' -or
+            if ($value -notmatch '^(0[xX][0-9a-fA-F]+|-?[0-9]+|[A-Za-z_][A-Za-z_ .:()0-9-]{0,159})$' -or
                 $value -match '(?i)(afirma|https?|wss?):|password|command.?line|token|secret') { $value = $null }
             @{name=$_.LocalName;field=$_.GetAttribute('Name');value=$value}
         })
         @{id=[string]$_.System.EventID;task=[string]$_.RenderingInfo.Task;level=[string]$_.System.Level;fields=$fields;
           structure=@($xml.SelectNodes('.//*') | ForEach-Object { $_.LocalName } | Select-Object -Unique)}
     })
-@{events=$events} | ConvertTo-Json -Depth 8
+$browserLog = Join-Path (Split-Path $env:FIRMICA_STARTUP_PID) 'browser-startup.log'
+$lines = @(Get-Content -LiteralPath $browserLog -ErrorAction SilentlyContinue)
+$errors = @($lines | Where-Object { $_ -match ':(ERROR|FATAL|WARNING):' } | Select-Object -First 40 | ForEach-Object {
+    $source = [regex]::Match($_, '([a-zA-Z0-9_]+\.cc)[(:]([0-9]+)')
+    @{source=$source.Groups[1].Value;line=$source.Groups[2].Value;
+      codes=@([regex]::Matches($_,'0x[0-9a-fA-F]{1,16}') | ForEach-Object { $_.Value });
+      lock_failure=($_ -match 'Lock file can not be created|process singleton|ProcessSingleton|profile.*in use');
+      access_denied=($_ -match 'Access is denied|ACCESS_DENIED');
+      thread_token=($_ -match 'thread.*token|token.*thread')}
+})
+@{events=$events;requested_profile_in_arguments=$profileArguments;browser_log_exists=(Test-Path -LiteralPath $browserLog);browser_errors=$errors} | ConvertTo-Json -Depth 8
 } catch { @{error_id=$_.FullyQualifiedErrorId;reason=$_.CategoryInfo.Reason} | ConvertTo-Json }
 "#;
         if let Ok(result) = support::try_output(
