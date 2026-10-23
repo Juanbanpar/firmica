@@ -351,6 +351,7 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, P
         "cannot launch the standard-user application on the interactive desktop"
     );
     drop(Handle(process.hThread));
+    fs::write(staged.join("application.pid"), process.dwProcessId.to_string()).unwrap();
     (
         Handle(process.hProcess),
         process.dwProcessId,
@@ -625,6 +626,7 @@ fn registration_under_standard_account() {
     let mut logon_sid = process_logon_sid(process_handle.0);
     let logon_station = desktop_access::DesktopAccess::grant(&mut logon_sid, true);
     let logon_desktop = desktop_access::DesktopAccess::grant(&mut logon_sid, false);
+    let trace = startup::Trace::start(temporary.path());
     assert_ne!(unsafe { ResumeThread(thread_handle.0) }, u32::MAX);
     let waited = unsafe { WaitForSingleObject(process_handle.0, 400_000) };
     if waited != WAIT_OBJECT_0 {
@@ -643,6 +645,9 @@ fn registration_under_standard_account() {
         }
     }
     drop(job);
+    if let Some(trace) = trace {
+        trace.finish(temporary.path(), &evidence);
+    }
     for name in [
         "result.json",
         "child.log",
