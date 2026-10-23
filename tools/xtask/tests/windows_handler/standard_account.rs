@@ -1,6 +1,6 @@
 //! A fresh logon and HKCU hive, not a filtered administrator token.
-#[path = "desktop_access.rs"]
-mod desktop_access;
+#[path = "session_access.rs"]
+mod session_access;
 #[path = "startup.rs"]
 mod startup;
 use super::*;
@@ -22,7 +22,8 @@ use windows_sys::Win32::{
         CopySid, CreateWellKnownSid,
         Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG},
         GetTokenInformation, LookupAccountNameW, LookupAccountSidW, TokenElevationType,
-        TokenElevationTypeDefault, TokenLogonSid, WinBuiltinUsersSid, TOKEN_GROUPS, TOKEN_QUERY,
+        TokenElevationTypeDefault, TokenLogonSid, TokenSessionId, WinBuiltinUsersSid, TOKEN_GROUPS,
+        TOKEN_QUERY,
     },
     System::{
         JobObjects::{
@@ -228,6 +229,30 @@ fn process_logon_sid(process: HANDLE) -> [usize; 16] {
         0
     );
     sid
+}
+
+fn process_session(process: HANDLE) -> u32 {
+    let mut token = ptr::null_mut();
+    assert_ne!(
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) },
+        0
+    );
+    let token = Handle(token);
+    let mut session = 0u32;
+    let mut needed = 0;
+    assert_ne!(
+        unsafe {
+            GetTokenInformation(
+                token.0,
+                TokenSessionId,
+                (&mut session as *mut u32).cast(),
+                mem::size_of_val(&session) as u32,
+                &mut needed,
+            )
+        },
+        0
+    );
+    session
 }
 
 fn copy_bundle(source: &Path, destination: &Path) {
@@ -569,8 +594,8 @@ fn registration_under_standard_account() {
     let application = wide(&application);
     let directory = wide(temporary.path());
     let mut command = wide(format!("\"{}\" --exact windows_standard_account::registration_under_standard_account --ignored --nocapture", temporary.path().join("registration-tests.exe").display()));
-    let station = desktop_access::DesktopAccess::grant(&mut sid, true);
-    let desktop = desktop_access::DesktopAccess::grant(&mut sid, false);
+    let station = session_access::SessionAccess::grant(&mut sid, true);
+    let desktop = session_access::SessionAccess::grant(&mut sid, false);
     // A timed-out GUI driver must not leave an application holding this profile open.
     let job = Handle(unsafe { CreateJobObjectW(ptr::null(), ptr::null()) });
     assert!(!job.0.is_null());
@@ -631,8 +656,10 @@ fn registration_under_standard_account() {
     assert_ne!(assigned, 0, "cannot supervise the disposable process tree");
     // Match an interactive logon: grant this logon's SID before GUI children start.
     let mut logon_sid = process_logon_sid(process_handle.0);
-    let logon_station = desktop_access::DesktopAccess::grant(&mut logon_sid, true);
-    let logon_desktop = desktop_access::DesktopAccess::grant(&mut logon_sid, false);
+    let logon_station = session_access::SessionAccess::grant(&mut logon_sid, true);
+    let logon_desktop = session_access::SessionAccess::grant(&mut logon_sid, false);
+    let namespace =
+        session_access::SessionAccess::namespace(&mut logon_sid, process_session(process_handle.0));
     let trace = startup::Trace::start(temporary.path());
     assert_ne!(unsafe { ResumeThread(thread_handle.0) }, u32::MAX);
     let waited = unsafe { WaitForSingleObject(process_handle.0, 400_000) };
@@ -682,6 +709,7 @@ fn registration_under_standard_account() {
     }
     drop(thread_handle);
     drop(process_handle);
+    drop(namespace);
     drop(logon_desktop);
     drop(logon_station);
     drop(desktop);
