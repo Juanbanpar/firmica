@@ -129,6 +129,16 @@ $report = foreach ($name in $logs) {
     } catch { @{log=$name;unavailable=$true} }
 }
 
+$report | ConvertTo-Json -Depth 5
+"#;
+    if let Ok(result) = support::try_output(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
+        30,
+    ) {
+        let _ = fs::write(evidence.join("startup-events.json"), result.stdout);
+    }
+}
+
 /// Capture only the WebView2 provider. Raw traces stay in the disposable staging
 /// directory; retained events omit URLs, paths, command lines and binary data.
 pub(super) struct Trace {
@@ -144,10 +154,20 @@ impl Trace {
         };
         let result = support::try_output(
             Command::new("logman.exe")
-                .args(["start", &trace.name, "-ets", "-p", "{E16EC3D2-BB0F-4E8F-BDB8-DE0BEA82DC3D}", "0x3F0000054404", "5", "-o"])
+                .args([
+                    "start",
+                    &trace.name,
+                    "-ets",
+                    "-p",
+                    "{E16EC3D2-BB0F-4E8F-BDB8-DE0BEA82DC3D}",
+                    "0x3F0000054404",
+                    "5",
+                    "-o",
+                ])
                 .arg(&trace.path),
             15,
-        ).ok()?;
+        )
+        .ok()?;
         result.status.success().then_some(trace)
     }
 
@@ -191,14 +211,5 @@ impl Drop for Trace {
             Command::new("logman.exe").args(["stop", &self.name, "-ets"]),
             15,
         );
-    }
-}
-$report | ConvertTo-Json -Depth 5
-"#;
-    if let Ok(result) = support::try_output(
-        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
-        30,
-    ) {
-        let _ = fs::write(evidence.join("startup-events.json"), result.stdout);
     }
 }
