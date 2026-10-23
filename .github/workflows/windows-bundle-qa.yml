@@ -7,6 +7,13 @@ on:
         description: CI run providing the windows-invocation artifact
         required: true
         type: string
+      native_runner:
+        description: Windows image for the native replay
+        type: choice
+        default: windows-latest
+        options:
+          - windows-latest
+          - windows-2022
 
 permissions:
   contents: read
@@ -14,7 +21,7 @@ permissions:
 
 jobs:
   native:
-    runs-on: windows-latest
+    runs-on: ${{ inputs.native_runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

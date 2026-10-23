@@ -96,8 +96,16 @@ fn wait_chain(thread: u32) -> Value {
 }
 
 fn singleton_access() -> Value {
-    use windows_sys::Win32::System::Threading::{OpenMutexW, MUTEX_ALL_ACCESS};
-    json!([
+    use windows_sys::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCESS};
+    let control = format!(r"Local\Firmica-qa-startup-{}", std::process::id());
+    let created = unsafe { CreateMutexW(std::ptr::null(), 0, wide(&control).as_ptr()) };
+    let creation_error = if created.is_null() {
+        std::io::Error::last_os_error().raw_os_error()
+    } else {
+        drop(Handle(created));
+        Some(0)
+    };
+    let existing = [
         r"Local\ChromeProcessSingletonStartup!",
         r"Local\MicrosoftEdgeProcessSingletonStartup!",
         r"Local\MicrosoftEdgeWebViewProcessSingletonStartup!",
@@ -112,7 +120,8 @@ fn singleton_access() -> Value {
             Some(0)
         };
         json!({"name":name,"open_all_access_error":error})
-    }))
+    });
+    json!({"unique_local_creation_error":creation_error,"existing":existing})
 }
 
 pub(super) fn sample(
