@@ -665,6 +665,9 @@ fn registration_under_standard_account() {
         unsafe { GetExitCodeProcess(process_handle.0, &mut exit) },
         0
     );
+    if exit != 0 {
+        startup::host_events(&evidence);
+    }
     drop(thread_handle);
     drop(process_handle);
     drop(logon_desktop);

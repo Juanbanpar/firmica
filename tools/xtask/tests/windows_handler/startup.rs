@@ -115,3 +115,25 @@ pub(super) fn sample(
         let _ = fs::write(staged.join("startup.json"), report.to_string());
     })
 }
+
+pub(super) fn host_events(evidence: &Path) {
+    let script = r#"
+$since = (Get-Date).AddMinutes(-5)
+$logs = @('Microsoft-Windows-CodeIntegrity/Operational','Microsoft-Windows-AppLocker/EXE and DLL','System','Application')
+$report = foreach ($name in $logs) {
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{LogName=$name;StartTime=$since} -MaxEvents 100 -ErrorAction Stop |
+            Where-Object { $_.Message -like '*firmica*' -or $_.Message -like '*msedgewebview*' } |
+            Select-Object -First 20 TimeCreated,Id,ProviderName,LevelDisplayName,Message)
+        @{log=$name;events=$events}
+    } catch { @{log=$name;unavailable=$true} }
+}
+$report | ConvertTo-Json -Depth 5
+"#;
+    if let Ok(result) = support::try_output(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
+        30,
+    ) {
+        let _ = fs::write(evidence.join("startup-events.json"), result.stdout);
+    }
+}

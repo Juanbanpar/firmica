@@ -15,7 +15,7 @@ permissions:
 jobs:
   native:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -39,6 +39,24 @@ jobs:
           "Bundle source: $source" | Tee-Object -FilePath bundle-source.txt
       - name: Install native UI test tooling
         run: python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
+      - name: Update the Evergreen WebView2 Runtime
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $before = Get-ItemPropertyValue $key -Name pv -ErrorAction SilentlyContinue
+          $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+            throw 'WebView2 installer signature is not valid for Microsoft Corporation'
+          }
+          $install = Start-Process $installer -ArgumentList '/silent','/install' -Wait -PassThru
+          $after = Get-ItemPropertyValue $key -Name pv -ErrorAction Stop
+          New-Item -ItemType Directory -Force .test-artifacts/windows-runtime | Out-Null
+          @{before=$before;after=$after;installer_exit=$install.ExitCode;sha256=(Get-FileHash $installer -Algorithm SHA256).Hash} |
+            ConvertTo-Json | Set-Content .test-artifacts/windows-runtime/runtime.json
+          if ($install.ExitCode -ne 0) { throw "WebView2 installer failed: $($install.ExitCode)" }
       - name: Exercise the extracted portable application
         timeout-minutes: 22
         shell: pwsh
@@ -64,5 +82,6 @@ jobs:
             .test-artifacts/windows-signing/
             .test-artifacts/windows-browser/
             .test-artifacts/windows-standard-account/
+            .test-artifacts/windows-runtime/
             bundle-source.txt
           if-no-files-found: warn
