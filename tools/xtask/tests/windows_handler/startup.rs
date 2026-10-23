@@ -181,15 +181,16 @@ $application = [uint32](Get-Content -LiteralPath $env:FIRMICA_STARTUP_PID)
 $events = @(Get-WinEvent -Path $env:FIRMICA_STARTUP_TRACE -Oldest -ErrorAction Stop |
     Where-Object { $_.ProcessId -eq $application } | Select-Object -First 2000 | ForEach-Object {
         $xml = [xml]$_.ToXml()
-        $fields = @($xml.Event.EventData.Data | ForEach-Object {
-            $value = [string]$_.'#text'
+        $fields = @($xml.SelectNodes('//*[local-name()="EventData" or local-name()="UserData"]//*[not(*)]') | ForEach-Object {
+            $value = $_.InnerText
             # Preserve numeric results and short diagnostic labels. Never retain
             # paths, URLs, command lines or arbitrary encoded payloads.
             if ($value -notmatch '^(0x[0-9a-fA-F]+|[0-9]+|[A-Za-z_][A-Za-z_ .:()0-9-]{0,159})$' -or
                 $value -match '(?i)(afirma|https?|wss?):|password|command.?line|token|secret') { $value = $null }
-            @{name=[string]$_.Name;value=$value}
+            @{name=$_.LocalName;field=$_.GetAttribute('Name');value=$value}
         })
-        @{id=$_.Id;task=$_.TaskDisplayName;level=$_.Level;fields=$fields}
+        @{id=$_.Id;task=$_.TaskDisplayName;level=$_.Level;fields=$fields;
+          structure=@($xml.SelectNodes('//*') | ForEach-Object { $_.LocalName } | Select-Object -Unique)}
     })
 @{events=$events} | ConvertTo-Json -Depth 8
 "#;

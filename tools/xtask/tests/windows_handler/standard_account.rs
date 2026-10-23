@@ -272,7 +272,7 @@ fn packaged_registration(staged: &Path) {
     assert!(!KEYS.iter().any(|path| exists(path)));
 }
 
-fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, PathBuf) {
+fn native_application(staged: &Path) -> (Handle, u32, u32, u16, PathBuf) {
     use std::os::windows::io::AsRawHandle;
     let bundle = staged.join("Bundle space & 'apostrophe'");
     let application = bundle.join(format!("firmica-qa-{}.exe", std::process::id()));
@@ -285,7 +285,6 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, P
     let mut environment: Vec<_> = std::env::vars()
         .filter(|(name, _)| {
             ![
-                "PATH",
                 "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
                 "WEBVIEW2_USER_DATA_FOLDER",
             ]
@@ -294,7 +293,6 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, P
         })
         .collect();
     environment.extend([
-        ("PATH".into(), paths.to_str().unwrap().into()),
         (
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS".into(),
             format!("--remote-debugging-port={port}"),
@@ -351,7 +349,11 @@ fn native_application(staged: &Path, paths: &OsStr) -> (Handle, u32, u32, u16, P
         "cannot launch the standard-user application on the interactive desktop"
     );
     drop(Handle(process.hThread));
-    fs::write(staged.join("application.pid"), process.dwProcessId.to_string()).unwrap();
+    fs::write(
+        staged.join("application.pid"),
+        process.dwProcessId.to_string(),
+    )
+    .unwrap();
     (
         Handle(process.hProcess),
         process.dwProcessId,
@@ -391,8 +393,7 @@ fn registration_under_standard_account() {
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
-        let (application_process, pid, thread, port, application) =
-            native_application(staged, &paths);
+        let (application_process, pid, thread, port, application) = native_application(staged);
         let startup = startup::sample(staged.to_owned(), application.clone(), thread);
         let result = output(
             Command::new(python)
