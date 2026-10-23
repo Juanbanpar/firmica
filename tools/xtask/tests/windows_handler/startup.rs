@@ -176,6 +176,17 @@ impl Trace {
             Command::new("logman.exe").args(["stop", &self.name, "-ets"]),
             15,
         );
+        // Convert TraceLogging's self-describing metadata before EventLogReader
+        // renders it; reading the raw ETL loses the payload's field definitions.
+        let decoded = staged.join("webview.evtx");
+        let _ = support::try_output(
+            Command::new("tracerpt.exe")
+                .arg(&self.path)
+                .args(["-of", "EVTX", "-o"])
+                .arg(&decoded)
+                .arg("-y"),
+            30,
+        );
         let script = r#"
 $application = [uint32](Get-Content -LiteralPath $env:FIRMICA_STARTUP_PID)
 $events = @(Get-WinEvent -Path $env:FIRMICA_STARTUP_TRACE -Oldest -ErrorAction Stop |
@@ -198,7 +209,7 @@ $events = @(Get-WinEvent -Path $env:FIRMICA_STARTUP_TRACE -Oldest -ErrorAction S
             Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", script])
                 .env("FIRMICA_STARTUP_PID", staged.join("application.pid"))
-                .env("FIRMICA_STARTUP_TRACE", &self.path),
+                .env("FIRMICA_STARTUP_TRACE", decoded),
             30,
         ) {
             fs::write(evidence.join("webview-events.json"), result.stdout).unwrap();
