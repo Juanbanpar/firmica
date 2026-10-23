@@ -178,21 +178,27 @@ impl Trace {
         );
         // Convert TraceLogging's self-describing metadata before EventLogReader
         // renders it; reading the raw ETL loses the payload's field definitions.
-        let decoded = staged.join("webview.evtx");
-        let _ = support::try_output(
+        let decoded = staged.join("webview.xml");
+        let conversion = support::try_output(
             Command::new("tracerpt.exe")
                 .arg(&self.path)
-                .args(["-of", "EVTX", "-o"])
+                .args(["-of", "XML", "-o"])
                 .arg(&decoded)
                 .arg("-y"),
             30,
         );
+        fs::write(
+            evidence.join("webview-decoder.json"),
+            json!({"exit":conversion.ok().and_then(|output|output.status.code()),"decoded":decoded.is_file()}).to_string(),
+        ).unwrap();
         let script = r#"
+try {
 $application = [uint32](Get-Content -LiteralPath $env:FIRMICA_STARTUP_PID)
-$events = @(Get-WinEvent -Path $env:FIRMICA_STARTUP_TRACE -Oldest -ErrorAction Stop |
-    Where-Object { $_.ProcessId -eq $application } | Select-Object -First 2000 | ForEach-Object {
-        $xml = [xml]$_.ToXml()
-        $fields = @($xml.SelectNodes('//*[local-name()="EventData" or local-name()="UserData"]//*[not(*)]') | ForEach-Object {
+$trace = [xml](Get-Content -LiteralPath $env:FIRMICA_STARTUP_TRACE -Raw -ErrorAction Stop)
+$events = @($trace.SelectNodes('//*[local-name()="Event"]') |
+    Where-Object { [uint32]$_.System.Execution.ProcessID -eq $application } | Select-Object -First 2000 | ForEach-Object {
+        $xml = $_
+        $fields = @($xml.SelectNodes('.//*[local-name()="EventData" or local-name()="UserData"]//*[not(*)]') | ForEach-Object {
             $value = $_.InnerText
             # Preserve numeric results and short diagnostic labels. Never retain
             # paths, URLs, command lines or arbitrary encoded payloads.
@@ -200,10 +206,11 @@ $events = @(Get-WinEvent -Path $env:FIRMICA_STARTUP_TRACE -Oldest -ErrorAction S
                 $value -match '(?i)(afirma|https?|wss?):|password|command.?line|token|secret') { $value = $null }
             @{name=$_.LocalName;field=$_.GetAttribute('Name');value=$value}
         })
-        @{id=$_.Id;task=$_.TaskDisplayName;level=$_.Level;fields=$fields;
-          structure=@($xml.SelectNodes('//*') | ForEach-Object { $_.LocalName } | Select-Object -Unique)}
+        @{id=[string]$_.System.EventID;task=[string]$_.RenderingInfo.Task;level=[string]$_.System.Level;fields=$fields;
+          structure=@($xml.SelectNodes('.//*') | ForEach-Object { $_.LocalName } | Select-Object -Unique)}
     })
 @{events=$events} | ConvertTo-Json -Depth 8
+} catch { @{error_id=$_.FullyQualifiedErrorId;reason=$_.CategoryInfo.Reason} | ConvertTo-Json }
 "#;
         if let Ok(result) = support::try_output(
             Command::new("powershell.exe")
