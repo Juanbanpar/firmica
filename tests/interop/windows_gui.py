@@ -83,6 +83,7 @@ def connect(playwright, port, process, evidence):
 
 
 def dialog(automation, page, selector, filename):
+    from pywinauto import win32defines
     # A WebView click does not bring the native application to the foreground.
     automation.top_window().set_focus()
     page.locator(selector).click()
@@ -101,8 +102,8 @@ def dialog(automation, page, selector, filename):
     # Foreground activation does not assign keyboard focus to a child control.
     button.set_keyboard_focus()
     assert button.has_keyboard_focus(), "dialog action did not receive keyboard focus"
-    # click() sends control messages at (0, 0) by default; use the client centre.
-    button.click(coords=button.client_rect().mid_point())
+    # Invoke the native button without depending on shared desktop cursor state.
+    button.post_message(win32defines.BM_CLICK)
     native.wait_not("visible", timeout=15)
 
 
