@@ -37,6 +37,10 @@ use firmica_signing::{
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use std::{path::Path, time::Duration};
 
+#[cfg(all(test, windows))]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos;

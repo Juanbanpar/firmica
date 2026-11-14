@@ -2,6 +2,9 @@ use firmica_key_worker::{WorkerError, WorkerKey};
 use secrecy::{SecretBox, SecretString};
 use std::path::Path;
 
+#[cfg(target_os = "macos")]
+mod support;
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[test]
 fn unsupported_platforms_reject_import_without_launching_a_worker() {
@@ -441,15 +444,9 @@ mod native {
 
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "build --example worker-fixture before running the native pipe checks"]
+    #[ignore = "requires native macOS process controls"]
     fn macos_pipe_deadlines_and_malformed_replies_reap_the_worker() {
-        let fixture = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples/worker-fixture");
+        let fixture = super::support::worker_fixture();
         for (mode, expected) in [
             ("silent", WorkerError::TimedOut),
             ("blocked", WorkerError::TimedOut),
@@ -458,7 +455,7 @@ mod native {
         ] {
             let directory = tempfile::tempdir().unwrap();
             let launcher = directory.path().join(mode);
-            fs::copy(&fixture, &launcher).expect("build the worker-fixture example");
+            fs::copy(fixture, &launcher).expect("cannot copy the worker fixture");
             let start = Instant::now();
             assert_eq!(
                 WorkerKey::import(

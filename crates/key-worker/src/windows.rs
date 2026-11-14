@@ -436,16 +436,9 @@ mod tests {
 
     fn fixture(mode: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let directory = tempfile::tempdir().unwrap();
-        let source = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples/worker-fixture.exe");
+        let source = crate::test_support::worker_fixture();
         let executable = directory.path().join(format!("{mode}.exe"));
-        fs::copy(&source, &executable)
-            .expect("build the worker-fixture example before Windows worker tests");
+        fs::copy(source, &executable).expect("cannot copy the worker fixture");
         (directory, executable)
     }
 
