@@ -92,11 +92,15 @@ def dialog(automation, page, selector, filename):
     if filename is not None:
         edit = native.child_window(class_name="Edit")
         edit.wait("ready", timeout=15)
+        edit.set_keyboard_focus()
+        assert edit.has_keyboard_focus(), "filename control did not receive keyboard focus"
         edit.set_edit_text(str(filename))
         assert edit.window_text() == str(filename)
     button = native.child_window(control_id=2 if filename is None else 1, class_name="Button")
     button.wait("ready", timeout=15)
-    button.set_focus()
+    # Foreground activation does not assign keyboard focus to a child control.
+    button.set_keyboard_focus()
+    assert button.has_keyboard_focus(), "dialog action did not receive keyboard focus"
     # click() sends control messages at (0, 0) by default; use the client centre.
     button.click(coords=button.client_rect().mid_point())
     native.wait_not("visible", timeout=15)
