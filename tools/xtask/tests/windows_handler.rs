@@ -1,5 +1,7 @@
 #![cfg(windows)]
 mod support;
+#[path = "windows_handler/standard_account.rs"]
+mod windows_standard_account;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -112,6 +114,10 @@ fn parse_command(command: &str) -> Vec<String> {
 #[test]
 #[ignore = "changes disposable Windows account associations; requires no existing Firmica/afirma handler"]
 fn registration_ownership_quoting_and_gui_exit_status() {
+    registration_checks(&support::root().join("tools/windows/handler.ps1"), None);
+}
+
+fn registration_checks(script_source: &Path, fixture: Option<&Path>) {
     assert!(
         !KEYS.iter().any(|path| exists(path)),
         "use a disposable Windows account without existing registrations"
@@ -133,16 +139,13 @@ fn registration_ownership_quoting_and_gui_exit_status() {
     let directory = temp.path().join("App space & 'apostrophe'");
     fs::create_dir(&directory).unwrap();
     let script = directory.join("handler.ps1");
-    fs::copy(support::root().join("tools/windows/handler.ps1"), &script).unwrap();
+    fs::copy(script_source, &script).unwrap();
     let app = directory.join("firmica.exe");
-    checked(
-        Command::new("rustc")
-            .args(["--edition=2021", "--crate-name", "handler_fixture"])
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/handler.rs"))
-            .arg("-o")
-            .arg(&app),
-        60,
-    );
+    if let Some(fixture) = fixture {
+        fs::copy(fixture, &app).unwrap();
+    } else {
+        compile_fixture(&app);
+    }
     let certificate = directory.join("TLS certificate.pem");
     let key = directory.join("TLS key.pem");
     fs::write(&certificate, "synthetic certificate path fixture").unwrap();
@@ -262,4 +265,15 @@ fn registration_ownership_quoting_and_gui_exit_status() {
     fs::copy(&script, percent.join("handler.ps1")).unwrap();
     invoke(&percent.join("handler.ps1"), "Install", &flags, false);
     assert!(!KEYS.iter().any(|path| exists(path)));
+}
+
+fn compile_fixture(destination: &Path) {
+    checked(
+        Command::new("rustc")
+            .args(["--edition=2021", "--crate-name", "handler_fixture"])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/handler.rs"))
+            .arg("-o")
+            .arg(destination),
+        60,
+    );
 }

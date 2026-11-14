@@ -19,51 +19,92 @@ const SESSION: &str = "0123456789abcdef";
 const ORIGIN: &str = "https://example.invalid";
 type Client = WebSocketStream<TlsStream<TcpStream>>;
 
-struct Peer {
-    address: SocketAddr,
+pub(super) struct Peer {
+    pub(super) address: SocketAddr,
+    #[cfg(target_os = "linux")]
+    pub(super) certificate: std::path::PathBuf,
+    #[cfg(target_os = "linux")]
+    pub(super) authority: std::path::PathBuf,
+    _directory: tempfile::TempDir,
     client: Arc<rustls::ClientConfig>,
-    requests: mpsc::Receiver<PendingRequest>,
+    pub(super) requests: mpsc::Receiver<PendingRequest>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Peer {
     async fn start() -> Self {
+        Self::configured("4", ORIGIN).await
+    }
+
+    pub(super) async fn configured(version: &str, origin: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let certificate = directory.path().join("tls.pem");
         let key = directory.path().join("tls.key");
-        let generated = Command::new("openssl")
-            .args([
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-nodes",
-                "-days",
-                "1",
-                "-subj",
-                "/CN=Firmica synthetic transport test",
-                "-addext",
-                "subjectAltName=IP:127.0.0.1",
-                "-addext",
-                "basicConstraints=critical,CA:FALSE",
-                "-addext",
-                "keyUsage=critical,digitalSignature,keyEncipherment",
-                "-addext",
-                "extendedKeyUsage=serverAuth",
-                "-keyout",
-            ])
-            .arg(&key)
-            .arg("-out")
-            .arg(&certificate)
-            .output()
-            .expect("OpenSSL CLI is required for transport tests");
-        assert!(
-            generated.status.success(),
-            "cannot generate synthetic TLS credentials"
-        );
+        let authority = directory.path().join("ca.pem");
+        let authority_key = directory.path().join("ca.key");
+        let request = directory.path().join("tls.csr");
+        let extensions = directory.path().join("tls.ext");
+        std::fs::write(&extensions, "subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n").unwrap();
+        for command in [
+            Command::new("openssl")
+                .args([
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=Firmica synthetic transport CA",
+                    "-addext",
+                    "basicConstraints=critical,CA:TRUE",
+                    "-addext",
+                    "keyUsage=critical,keyCertSign,cRLSign",
+                    "-keyout",
+                ])
+                .arg(&authority_key)
+                .arg("-out")
+                .arg(&authority),
+            Command::new("openssl")
+                .args([
+                    "req",
+                    "-new",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-subj",
+                    "/CN=Firmica synthetic transport test",
+                    "-keyout",
+                ])
+                .arg(&key)
+                .arg("-out")
+                .arg(&request),
+            Command::new("openssl")
+                .args(["x509", "-req", "-days", "1", "-in"])
+                .arg(&request)
+                .arg("-CA")
+                .arg(&authority)
+                .arg("-CAkey")
+                .arg(&authority_key)
+                .arg("-CAcreateserial")
+                .arg("-extfile")
+                .arg(&extensions)
+                .arg("-out")
+                .arg(&certificate),
+        ] {
+            assert!(
+                command
+                    .output()
+                    .expect("OpenSSL CLI is required for transport tests")
+                    .status
+                    .success(),
+                "cannot generate synthetic TLS credentials"
+            );
+        }
         let tls = load_tls(&certificate, &key).unwrap();
         let mut roots = rustls::RootCertStore::empty();
-        for certificate in CertificateDer::pem_file_iter(&certificate).unwrap() {
+        for certificate in CertificateDer::pem_file_iter(&authority).unwrap() {
             roots.add(certificate.unwrap()).unwrap();
         }
         let client = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -75,7 +116,7 @@ impl Peer {
         .with_no_client_auth();
         let bootstrap = WebSocketBootstrap::from_request(
             &ProtocolRequest::parse(&format!(
-                "afirma://websocket?v=4&jvc=4&ports=49152&idsession={SESSION}"
+                "afirma://websocket?v={version}&jvc=4&ports=49152&idsession={SESSION}"
             ))
             .unwrap(),
         )
@@ -85,7 +126,7 @@ impl Peer {
         let server = Server {
             listener,
             tls,
-            origin: ORIGIN.into(),
+            origin: origin.into(),
             session: Arc::new(Mutex::new(Session {
                 bootstrap,
                 used: false,
@@ -98,6 +139,11 @@ impl Peer {
         });
         Self {
             address,
+            #[cfg(target_os = "linux")]
+            certificate,
+            #[cfg(target_os = "linux")]
+            authority,
+            _directory: directory,
             client: Arc::new(client),
             requests,
             task,

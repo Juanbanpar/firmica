@@ -15,7 +15,7 @@ jobs:
       matrix:
         os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       OPENSSL_STATIC: '1'
@@ -40,7 +40,6 @@ jobs:
         run: cargo xtask install-dx
       - name: Build and seal native application
         run: cargo xtask bundle --debug
-      - run: cargo build --locked -p firmica-key-worker --example worker-fixture
       - run: cargo test --locked -p firmica-key-worker
       - run: cargo test --locked -p firmica-key-worker --test worker -- --ignored
       - name: Verify XAdES with the installed XMLSec version
@@ -59,7 +58,7 @@ jobs:
         run: |
           npm ci
           npx playwright install firefox
-      - name: Verify native dialogs and Firefox AutoScript signing
+      - name: Verify native dialogs, AutoScript and protocol 4.1 signing
         run: cargo test --locked -p xtask --test macos -- --ignored --nocapture --test-threads=1
       - run: cargo test --locked -p desktop -p xtask
       - run: cargo clippy --locked -p firmica-key-worker -p desktop -p xtask --all-targets -- -D warnings

@@ -2,6 +2,9 @@ use firmica_key_worker::{WorkerError, WorkerKey};
 use secrecy::{SecretBox, SecretString};
 use std::path::Path;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod support;
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[test]
 fn unsupported_platforms_reject_import_without_launching_a_worker() {
@@ -43,7 +46,7 @@ mod native {
     #[cfg(target_os = "linux")]
     use firmica_key_worker::{MAX_ADDRESS_SPACE_BYTES, MAX_CPU_SECONDS};
     #[cfg(target_os = "linux")]
-    use std::{io::Read, os::unix::fs::PermissionsExt, process::Stdio};
+    use std::{io::Read, os::unix::ffi::OsStrExt, process::Stdio};
 
     const RSA: SignatureAlgorithm = SignatureAlgorithm::RsaPkcs1v15Sha256;
     const EC: SignatureAlgorithm = SignatureAlgorithm::EcdsaP256Sha256;
@@ -280,26 +283,25 @@ mod native {
     }
 
     #[cfg(target_os = "linux")]
-    fn quote(path: &Path) -> String {
-        format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"))
+    fn pipe_fixture(mode: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let source = super::support::worker_fixture();
+        // Stay on the same filesystem and never open the executable for writing:
+        // parallel fork/exec can otherwise reject a newly written file with ETXTBSY.
+        let directory = tempfile::tempdir_in(source.parent().unwrap()).unwrap();
+        let path = directory.path().join(mode);
+        fs::hard_link(source, &path).unwrap();
+        if mode == "forward" {
+            fs::write(
+                path.with_extension("target"),
+                executable().as_os_str().as_bytes(),
+            )
+            .unwrap();
+        }
+        (directory, path)
     }
     #[cfg(target_os = "linux")]
-    fn launcher(directory: &Path, body: &str) -> std::path::PathBuf {
-        let path = directory.join("worker");
-        fs::write(
-            &path,
-            format!(
-                "#!/bin/sh\nprintf '%s' \"$$\" > {}\n{body}\n",
-                quote(&directory.join("pid"))
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        path
-    }
-    #[cfg(target_os = "linux")]
-    fn pid(directory: &Path) -> u32 {
-        fs::read_to_string(directory.join("pid"))
+    fn pid(executable: &Path) -> u32 {
+        fs::read_to_string(executable.with_extension("pid"))
             .unwrap()
             .parse()
             .unwrap()
@@ -315,14 +317,8 @@ mod native {
     #[cfg(target_os = "linux")]
     #[test]
     fn deadlines_cover_stalled_startup_and_blocked_pipe_writes() {
-        for hello in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let prefix = if hello {
-                "printf '\\000\\000\\000\\007FRMKEY\\001'\n"
-            } else {
-                ""
-            };
-            let launcher = launcher(directory.path(), &format!("{prefix}exec sleep 60"));
+        for mode in ["silent", "blocked"] {
+            let (_directory, launcher) = pipe_fixture(mode);
             let start = Instant::now();
             assert_eq!(
                 WorkerKey::import(
@@ -334,39 +330,31 @@ mod native {
                 Some(WorkerError::TimedOut)
             );
             assert!(start.elapsed() < OPERATION_TIMEOUT + std::time::Duration::from_secs(3));
-            gone(pid(directory.path()));
+            gone(pid(&launcher));
         }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn malformed_replies_fail_before_allocating_unbounded_output() {
-        let directory = tempfile::tempdir().unwrap();
-        let launcher = launcher(
-            directory.path(),
-            "printf '\\377\\377\\377\\377'\nexec sleep 60",
-        );
+        let (_directory, launcher) = pipe_fixture("malformed");
         assert_eq!(
             WorkerKey::import(&launcher, secret(vec![1]), SecretString::from(PASSWORD)).err(),
             Some(WorkerError::Protocol)
         );
-        gone(pid(directory.path()));
+        gone(pid(&launcher));
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn dropping_or_losing_a_worker_reaps_it_and_prevents_publication() {
         for killed in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let launcher = launcher(
-                directory.path(),
-                &format!("exec {} --stdio", quote(executable())),
-            );
+            let (_directory, launcher) = pipe_fixture("forward");
             let (container, _) = fixture(EC);
             let mut key =
                 WorkerKey::import(&launcher, secret(container), SecretString::from(PASSWORD))
                     .unwrap();
-            let pid = pid(directory.path());
+            let pid = pid(&launcher);
             let args = fs::read(format!("/proc/{pid}/cmdline")).unwrap();
             assert!(!String::from_utf8_lossy(&args).contains(PASSWORD));
             if killed {
@@ -441,15 +429,9 @@ mod native {
 
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "build --example worker-fixture before running the native pipe checks"]
+    #[ignore = "requires native macOS process controls"]
     fn macos_pipe_deadlines_and_malformed_replies_reap_the_worker() {
-        let fixture = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples/worker-fixture");
+        let fixture = super::support::worker_fixture();
         for (mode, expected) in [
             ("silent", WorkerError::TimedOut),
             ("blocked", WorkerError::TimedOut),
@@ -458,7 +440,7 @@ mod native {
         ] {
             let directory = tempfile::tempdir().unwrap();
             let launcher = directory.path().join(mode);
-            fs::copy(&fixture, &launcher).expect("build the worker-fixture example");
+            fs::copy(fixture, &launcher).expect("cannot copy the worker fixture");
             let start = Instant::now();
             assert_eq!(
                 WorkerKey::import(
@@ -504,12 +486,7 @@ mod native {
         // detecting the mismatch. Encoding this integer does not perform expensive work.
         pfx.mac.iterations = 1_000_000_000;
         #[cfg(target_os = "linux")]
-        let directory = tempfile::tempdir().unwrap();
-        #[cfg(target_os = "linux")]
-        let launcher = launcher(
-            directory.path(),
-            &format!("exec {} --stdio", quote(executable())),
-        );
+        let (_directory, launcher) = pipe_fixture("forward");
         #[cfg(any(windows, target_os = "macos"))]
         let launcher = executable().to_path_buf();
         let start = Instant::now();
@@ -524,6 +501,6 @@ mod native {
         ));
         assert!(start.elapsed() < OPERATION_TIMEOUT + std::time::Duration::from_secs(3));
         #[cfg(target_os = "linux")]
-        gone(pid(directory.path()));
+        gone(pid(&launcher));
     }
 }

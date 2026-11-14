@@ -49,7 +49,7 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
     let child, session, xenv;
     let stderr = '';
     try {
-      child = spawn('xvfb-run', ['-a', '-s', '-screen 0 1280x1100x24', 'sh', '-c', 'openbox >/dev/null 2>&1 & exec "$@"', 'test-wm', 'dbus-run-session', '--config-file', bus, '--', 'sh', '-c',
+      child = spawn('xvfb-run', ['-a', '-s', '-screen 0 1280x1100x24', 'sh', '-c', 'openbox 1>&2 & exec "$@"', 'test-wm', 'dbus-run-session', '--config-file', bus, '--', 'sh', '-c',
         'printf "%s\n%s\n%s" "$DISPLAY" "$XAUTHORITY" "$$" > "$1"; exec "$2"', 'signing-test', path.join(dir, 'display'), binary],
       {env, cwd:dir, stdio:['ignore', 'ignore', 'pipe'], detached:true});
       child.stderr.on('data', data => { stderr += data; });
@@ -57,6 +57,9 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
       const [display, authority, appPid] = (await readFile(path.join(dir, 'display'), 'utf8')).split('\n');
       xenv = {...env, DISPLAY:display, XAUTHORITY:authority};
       const xdo = args => execFileSync('xdotool', args, {env:xenv, timeout:5000, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
+      // The WebView can be ready before the independently started window manager.
+      await until(() => execFileSync('xprop', ['-root', '_NET_SUPPORTED'],
+        {env:xenv, timeout:5000, encoding:'utf8'}).includes('_NET_ACTIVE_WINDOW'));
       const evaluate = expression => session.evaluate(expression);
       const click = id => evaluate(`setTimeout(() => document.querySelector(${JSON.stringify(id)}).click(), 0); true`);
       const input = (id, value, event='input') => evaluate(`(() => { const input = document.querySelector(${JSON.stringify(id)}); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event(${JSON.stringify(event)}, {bubbles:true})); return true; })()`);
@@ -164,7 +167,7 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
         if (format==='pades') {
           assert.ok((await readFile(path.join(output,'result.pdf'))).subarray(0,pdf.length).equals(pdf));
           assert.match(execFileSync('pdfsig',['-nocert',path.join(output,'result.pdf')],{encoding:'utf8'}),/Signature is Valid/);
-        } else execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','rsa.pem','--enabled-reference-uris','empty,same-doc',
+        } else execFileSync('xmlsec1',['--verify','--trusted-pem','rsa.pem','--enabled-reference-uris','empty,same-doc',
           '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties',path.join(output,'result.xsig')],{cwd:dir,stdio:['ignore','pipe','pipe']});
       }
       await select('ec');

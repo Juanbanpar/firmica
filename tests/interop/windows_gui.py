@@ -83,20 +83,27 @@ def connect(playwright, port, process, evidence):
 
 
 def dialog(automation, page, selector, filename):
+    from pywinauto import win32defines
+    # A WebView click does not bring the native application to the foreground.
+    automation.top_window().set_focus()
     page.locator(selector).click()
     native = automation.window(class_name="#32770")
     native.wait("ready", timeout=15)
     native.set_focus()
-    if filename is None:
-        native.child_window(control_id=2, class_name="Button").click_input()
-    else:
+    if filename is not None:
         edit = native.child_window(class_name="Edit")
         edit.wait("ready", timeout=15)
+        edit.set_keyboard_focus()
+        assert edit.has_keyboard_focus(), "filename control did not receive keyboard focus"
         edit.set_edit_text(str(filename))
         assert edit.window_text() == str(filename)
-        confirm = native.child_window(control_id=1, class_name="Button")
-        confirm.wait("ready", timeout=15)
-        confirm.click_input()
+    button = native.child_window(control_id=2 if filename is None else 1, class_name="Button")
+    button.wait("ready", timeout=15)
+    # Foreground activation does not assign keyboard focus to a child control.
+    button.set_keyboard_focus()
+    assert button.has_keyboard_focus(), "dialog action did not receive keyboard focus"
+    # Invoke the native button without depending on shared desktop cursor state.
+    button.post_message(win32defines.BM_CLICK)
     native.wait_not("visible", timeout=15)
 
 
@@ -147,3 +154,11 @@ class ObservedProcess:
         if self.handle:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
+
+    def wait(self, timeout):
+        result = self.kernel.WaitForSingleObject(self.handle, int(timeout * 1000))
+        if result == 258:
+            raise TimeoutError("native process did not exit")
+        if result != 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return self.poll()

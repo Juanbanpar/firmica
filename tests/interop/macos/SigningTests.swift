@@ -48,6 +48,23 @@ final class SigningTests: XCTestCase {
         add(hierarchy)
     }
 
+    private func terminateAndWait() throws {
+        app.terminate()
+        // XCTest state can settle before LaunchServices removes the old instance.
+        try wait {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").isEmpty
+        }
+    }
+
+    private func waitForBundle(_ path: String) throws {
+        let expected = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        try wait {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").contains {
+                !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath().path == expected
+            }
+        }
+    }
+
     private func command(_ executable: String, _ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -159,9 +176,7 @@ final class SigningTests: XCTestCase {
             let evidence = config["evidence"] as! String
             _ = try command("/usr/bin/open", ["-a", config["app"] as! String,
                 "--stdout", evidence + "/application.stdout.log", "--stderr", evidence + "/application.stderr.log"])
-            try wait { NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL != nil }
-            XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
-                URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
+            try waitForBundle(config["app"] as! String)
             app.activate()
             XCTAssertTrue(app.links["Sign a document"].waitForExistence(timeout: 15))
             app.links["Sign a document"].click()
@@ -189,7 +204,7 @@ final class SigningTests: XCTestCase {
             XCTAssertEqual(try workers().count, 0)
             XCTAssertEqual(try json("/output/\(index)")["exists"] as? Bool, true)
             capture("local-\(index)")
-            app.terminate()
+            try terminateAndWait()
         }
         _ = try json("/local-done")
         try wait({ try self.json("/state")["browser_ready"] as? Bool == true }, seconds: 180)
@@ -198,12 +213,11 @@ final class SigningTests: XCTestCase {
                 let state = try self.json("/state")
                 return state["index"] as? Int == index && state["started"] as? Bool == true
             }, seconds: 45)
-            try wait { NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL != nil }
-            XCTAssertEqual(NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.bundleURL?.resolvingSymlinksInPath().path,
-                URL(fileURLWithPath: config["app"] as! String).resolvingSymlinksInPath().path)
+            try waitForBundle(config["app"] as! String)
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             try english()
+            XCTAssertTrue(app.staticTexts[scenario["protocol"] as! String].exists)
             XCTAssertFalse(app.buttons["Document (up to 16 MiB)"].exists)
             try prepare(scenario, password: password, local: false)
             // LaunchServices must deliver to this instance without replacing pending consent.
@@ -216,7 +230,7 @@ final class SigningTests: XCTestCase {
             XCTAssertTrue(app.staticTexts[scenario["hash"] as! String].exists)
             let action = scenario["action"] as! String
             _ = try json("/prepared")
-            if index == 0 {
+            if index == 0 || ((scenario["protocol"] as? String) == "4.1" && (browser[index - 1]["protocol"] as? String) != "4.1") {
                 app.typeKey("h", modifierFlags: .command)
                 try wait {
                     NSRunningApplication.runningApplications(withBundleIdentifier: "org.firmica.client").first?.isHidden == true
@@ -243,7 +257,7 @@ final class SigningTests: XCTestCase {
             try wait({ try self.json("/state")["result_received"] as? Bool == true }, seconds: 30)
             try wait { try self.workers().isEmpty }
             capture("browser-\(index)-\(action)")
-            app.terminate()
+            try terminateAndWait()
             _ = try json("/native-done")
         }
     }

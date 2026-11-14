@@ -1,4 +1,4 @@
-// Unmodified AutoScript → Firefox OS handler → native consent → controlled key
+// AutoScript (4) or a raw 4.1 client → Firefox OS handler → native consent → controlled key
 // worker → WSS result. Every key, profile, association and trust entry is disposable.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,37 +17,44 @@ const password = 'synthetic-browser-password';
 const smallContent = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls']) {
-  test(`Firefox AutoScript signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
+for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls', ...['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount'].map(name => `protocol41-${name}`)]) {
+  test(`Firefox ${scenario.startsWith('protocol41-') ? 'protocol 4.1' : 'AutoScript'} signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
+    const protocol41 = scenario.startsWith('protocol41-');
+    const operation = protocol41 ? scenario.slice('protocol41-'.length) : scenario;
+    const protocolPort = protocol41 ? await freePort() : undefined;
     const dir = await mkdtemp(path.join(tmpdir(), 'firmica-browser-signing-'));
     const openssl = args => execFileSync('openssl', args, {cwd:dir, stdio:['ignore','pipe','pipe']});
-    const ec = scenario === 'ec' || scenario === 'pades-ec' || scenario === 'xades-detached';
-    const pdf = scenario.startsWith('pades-');
-    const xml = scenario.startsWith('xades-');
-    const placement = scenario === 'xades-enveloped' ? 'XAdES Enveloped'
-      : scenario === 'xades-detached' ? 'XAdES Detached' : 'XAdES Enveloping';
+    const ec = operation === 'ec' || operation === 'pades-ec' || operation === 'xades-detached';
+    const pdf = operation.startsWith('pades-');
+    const xml = operation.startsWith('xades-');
+    const placement = operation === 'xades-enveloped' ? 'XAdES Enveloped'
+      : operation === 'xades-detached' ? 'XAdES Detached' : 'XAdES Enveloping';
     const format = pdf ? 'PAdES' : xml ? 'XAdES' : 'CAdES';
     const properties = pdf ? (ec ? 'signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Browser appearance' : '')
-      : xml ? `format=${placement}` : `mode=${ec || scenario === 'large-attached' ? 'implicit' : 'explicit'}`;
-    const managed = scenario === 'managed-tls';
-    const attached = ec || scenario === 'large-attached';
+      : xml ? `format=${placement}` : `mode=${ec || operation === 'large-attached' ? 'implicit' : 'explicit'}`;
+    const managed = operation === 'managed-tls';
+    const attached = ec || operation === 'large-attached';
     const content = pdf ? await readFile(path.join(root,'crates/pades/tests/fixtures/document.pdf'))
-      : scenario === 'xades-enveloped' ? Buffer.from('<document xmlns="urn:firmica:test">Browser XML &amp; content</document>')
-      : scenario === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
-      : scenario === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
-      : scenario === 'large-detached' ? Buffer.alloc(1024 * 1024, 0xa5) : smallContent;
+      : operation === 'xades-enveloped' ? Buffer.from('<document xmlns="urn:firmica:test">Browser XML &amp; content</document>')
+      : operation === 'oversize-document' ? Buffer.alloc(16 * 1024 * 1024 + 1, 0xff)
+      : operation === 'large-attached' ? Buffer.alloc(16 * 1024 * 1024, 0xff)
+      : operation === 'large-detached' ? Buffer.alloc(1024 * 1024, 0xa5) : smallContent;
     const script = await autoscript();
+    const protocol41Script = await readFile(path.join(root,'tests/interop/protocol41-client.js'));
+    const rawClient = `document.querySelector('#sign').onclick = () => signProtocol41(${JSON.stringify({
+      port:protocolPort, content:content.toString('base64'), algorithm:ec ? 'ec' : 'rsa', format, properties,
+    })}).then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'});`;
     const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic browser signing</title>
-      <button id="sign">Sign</button><script src="/autoscript.js"></script><script>
-      AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152, 49154); AutoScript.cargarAppAfirma(); AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
+      <button id="sign">Sign</button><script src="/autoscript.js"></script><script src="/protocol41.js"></script><script>
+      ${protocol41 ? rawClient : `AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152, 49154); AutoScript.cargarAppAfirma(); AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
       document.querySelector('#sign').onclick = () => AutoScript.sign('${content.toString('base64')}',
         '${ec ? 'SHA256withECDSA' : 'SHA256withRSA'}', '${format}', ${JSON.stringify(properties)},
         (signature, certificate) => {window.result = {signature, certificate};},
-        (type, message, code) => {window.result = {type, message, code};});
+        (type, message, code) => {window.result = {type, message, code};});`}
       </script></html>`;
     const server = createServer((req,res) => {
-      res.setHeader('Content-Type', req.url === '/autoscript.js' ? 'text/javascript' : 'text/html');
-      res.end(req.url === '/autoscript.js' ? script : html);
+      res.setHeader('Content-Type', req.url.endsWith('.js') ? 'text/javascript' : 'text/html');
+      res.end(req.url === '/autoscript.js' ? script : req.url === '/protocol41.js' ? protocol41Script : html);
     });
     let child, browser, native, xenv;
     let stderr = '';
@@ -102,7 +109,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       const env = {...process.env, GDK_BACKEND:'x11', XDG_RUNTIME_DIR:runtime, XDG_SESSION_TYPE:'x11', LC_ALL:'C.UTF-8',
         XDG_DATA_HOME:data, XDG_CONFIG_HOME:config, XDG_CACHE_HOME:path.join(dir,'cache'), PATH:`${path.dirname(binary)}:${process.env.PATH}`, WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${port}`};
       execFileSync('update-desktop-database',[path.join(data,'applications')],{env});
-      child = spawn('xvfb-run',['-a','-s','-screen 0 1280x1100x24','sh','-c','openbox >/dev/null 2>&1 & exec "$@"','test-wm',
+      child = spawn('xvfb-run',['-a','-s','-screen 0 1280x1100x24','sh','-c','openbox 1>&2 & exec "$@"','test-wm',
         'dbus-run-session','--config-file',bus,'--','sh','-c',
         'printf "%s\n%s\n%s\n%s" "$DISPLAY" "$XAUTHORITY" "$DBUS_SESSION_BUS_ADDRESS" "$$" > "$1"; shift; exec "$@"',
         'browser-test',path.join(dir,'display'),binary,...flags],
@@ -112,6 +119,9 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       const [display,authority,busAddress,appPid] = (await readFile(path.join(dir,'display'),'utf8')).split('\n');
       xenv = {...env,DISPLAY:display,XAUTHORITY:authority,DBUS_SESSION_BUS_ADDRESS:busAddress};
       const xdo = args => execFileSync('xdotool',args,{env:xenv,encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();
+      // The WebView can be ready before the independently started window manager.
+      await until(() => execFileSync('xprop', ['-root', '_NET_SUPPORTED'],
+        {env:xenv, timeout:5000, encoding:'utf8'}).includes('_NET_ACTIVE_WINDOW'));
       const click = selector => native.evaluate(`setTimeout(() => document.querySelector(${JSON.stringify(selector)}).click(), 0); true`);
       const workers = async () => {
         const tasks = await readdir(`/proc/${appPid}/task`);
@@ -133,7 +143,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       });
       await page.goto(origin);
       await page.locator('#sign').click();
-      if (scenario === 'oversize-document') {
+      if (operation === 'oversize-document') {
         await page.waitForFunction(() => window.result, undefined, {timeout:20000});
         const result = await page.evaluate('window.result');
         assert.equal(result.type,'java.lang.Exception');
@@ -144,6 +154,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         return;
       }
       await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
+      assert.equal(await native.evaluate('document.querySelector("#request-version").textContent'),protocol41 ? '4.1' : '4');
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'supported request must open the signing form');
       await click('#sign-language');
       assert.equal(await native.evaluate('!!document.querySelector("#sign-document")'),false,'browser cannot choose a local document');
@@ -179,22 +190,22 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       assert.equal(await native.evaluate('document.querySelector("#sign-document-hash").textContent'),sha256(content));
       assert.equal(await native.evaluate('document.querySelector("#sign-fingerprint").textContent'),sha256(signer));
       assert.match(await native.evaluate('document.querySelector("#sign-review-format").textContent'),new RegExp(`^${format}`));
-      if (scenario === 'pades-ec') assert.match(await native.evaluate('document.querySelector("#sign-review-appearance").textContent'),/Browser appearance/);
+      if (operation === 'pades-ec') assert.match(await native.evaluate('document.querySelector("#sign-review-appearance").textContent'),/Browser appearance/);
       assert.equal(await native.evaluate('document.querySelector("#sign-save").disabled'),true,'explicit acknowledgement is required');
       assert.equal((await workers()).length,1);
-      if (process.env.FIRMICA_SCREENSHOT && scenario === 'rsa') {
+      if (process.env.FIRMICA_SCREENSHOT && operation === 'rsa') {
         xdo(['windowmove',nativeWindow,'40','10','windowsize',nativeWindow,'1000','1040']);
         await new Promise(resolve => setTimeout(resolve,200));
         execFileSync('import',['-window',nativeWindow,process.env.FIRMICA_SCREENSHOT],{env:xenv});
       }
-      if (scenario === 'unmount') {
+      if (operation === 'unmount') {
         await click('a[href="/diagnostics"]');
       } else {
         // A second invocation cannot replace the frozen request or authorize it.
         execFileSync(binary,['afirma://sign?ver=4&format=CAdES&algorithm=SHA256withRSA&dat=b3RoZXI%3D'],{env:xenv,cwd:dir});
         assert.equal(await native.evaluate('document.querySelector("#sign-document-hash").textContent'),sha256(content));
         assert.equal(await native.evaluate('document.querySelector("#sign-save").disabled'),true);
-        if (scenario === 'worker-failure') {
+        if (operation === 'worker-failure') {
           process.kill(Number((await workers())[0]),'SIGKILL');
         }
         await click('#sign-acknowledge');
@@ -204,12 +215,13 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       await page.waitForFunction(() => window.result, undefined, {timeout:20000});
       const result = await page.evaluate('window.result');
       await until(async () => (await workers()).length === 0);
-      if (scenario === 'worker-failure') {
-        assert.equal(result.type,'java.lang.Exception');
-        assert.match(result.code,/^SAF_09:/);
+      if (operation === 'worker-failure') {
+        assert.equal(result.type, protocol41 ? undefined : 'java.lang.Exception');
+        assert.match(result.code, protocol41 ? /^err-00:=AF200115 - / : /^SAF_09:/);
         assert.equal(result.signature,undefined);
-      } else if (scenario === 'unmount') {
-        assert.equal(result.type,'es.gob.afirma.core.AOCancelledOperationException');
+      } else if (operation === 'unmount') {
+        if (protocol41) assert.match(result.code, /^err-11:=AF500001 - /);
+        else assert.equal(result.type,'es.gob.afirma.core.AOCancelledOperationException');
         assert.equal(result.signature,undefined);
       } else {
         assert.equal(result.type,undefined);
@@ -222,9 +234,9 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
           assert.match(verification,/Signature is Valid/);
         } else if (xml) {
           await writeFile(path.join(dir,'result.xml'),signed);
-          execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','signer.pem','--enabled-reference-uris','empty,same-doc',
+          execFileSync('xmlsec1',['--verify','--trusted-pem','signer.pem','--enabled-reference-uris','empty,same-doc',
             '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties','--id-attr:Id','http://www.w3.org/2000/09/xmldsig#:Object','result.xml'],{cwd:dir,stdio:['ignore','pipe','pipe']});
-          if (scenario !== 'xades-enveloped') {
+          if (operation !== 'xades-enveloped') {
             const data=await page.evaluate(text=>new DOMParser().parseFromString(text,'application/xml').querySelector('[Id="Firmica-Content"]').textContent,signed.toString());
             assert.deepEqual(Buffer.from(data,'base64'),content);
           } else assert.ok(signed.toString().includes('Browser XML &amp; content'));
@@ -236,7 +248,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         }
         await until(async () => (await native.evaluate('document.querySelector("#browser-status")?.textContent'))?.includes('Signature prepared'));
       }
-      if (scenario.startsWith('large-')) {
+      if (operation.startsWith('large-')) {
         const sent = frames.find(frame => frame.direction === 'sent' && frame.data.startsWith('afirma://sign?'));
         assert.ok(sent.data.length > 64 * 1024,'document must cross the old request boundary');
         if (attached) assert.ok(Buffer.from(result.signature,'base64').length > content.length,'attached response must contain the entire document');
@@ -248,7 +260,12 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         const ws = new WebSocket(endpoint); const timer = setTimeout(() => {ws.close();reject(new Error('replay timeout'));},5000);
         ws.onopen = () => ws.send(session); ws.onmessage = event => {clearTimeout(timer);ws.close();resolve(event.data);};
       }),{endpoint,session});
-      assert.match(replay,/^SAF_04:/,'a result cannot be retrieved twice');
+      assert.match(replay, protocol41 ? /^err-00:=AF600002 - / : /^SAF_04:/,'a result cannot be retrieved twice');
+      if (protocol41) {
+        const evidence = path.join(root,'.test-artifacts/protocol41');
+        await mkdir(evidence,{recursive:true});
+        await writeFile(path.join(evidence,`native-${operation}.json`), JSON.stringify({protocol:'4.1',scenario:operation,browser:browser.browser().version(),passed:true}));
+      }
       assert(!stderr.includes(password)); assert(!stderr.includes('BEGIN PRIVATE KEY')); assert(!stderr.includes('panicked at'));
     } catch (error) {
       console.error(error.message);
