@@ -167,7 +167,7 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
         if (format==='pades') {
           assert.ok((await readFile(path.join(output,'result.pdf'))).subarray(0,pdf.length).equals(pdf));
           assert.match(execFileSync('pdfsig',['-nocert',path.join(output,'result.pdf')],{encoding:'utf8'}),/Signature is Valid/);
-        } else execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','rsa.pem','--enabled-reference-uris','empty,same-doc',
+        } else execFileSync('xmlsec1',['--verify','--trusted-pem','rsa.pem','--enabled-reference-uris','empty,same-doc',
           '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties',path.join(output,'result.xsig')],{cwd:dir,stdio:['ignore','pipe','pipe']});
       }
       await select('ec');

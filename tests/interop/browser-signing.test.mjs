@@ -234,7 +234,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
           assert.match(verification,/Signature is Valid/);
         } else if (xml) {
           await writeFile(path.join(dir,'result.xml'),signed);
-          execFileSync('xmlsec1',['--verify','--pubkey-cert-pem','signer.pem','--enabled-reference-uris','empty,same-doc',
+          execFileSync('xmlsec1',['--verify','--trusted-pem','signer.pem','--enabled-reference-uris','empty,same-doc',
             '--id-attr:Id','http://uri.etsi.org/01903/v1.3.2#:SignedProperties','--id-attr:Id','http://www.w3.org/2000/09/xmldsig#:Object','result.xml'],{cwd:dir,stdio:['ignore','pipe','pipe']});
           if (operation !== 'xades-enveloped') {
             const data=await page.evaluate(text=>new DOMParser().parseFromString(text,'application/xml').querySelector('[Id="Firmica-Content"]').textContent,signed.toString());
