@@ -1,6 +1,6 @@
-//! Windows process-control regression fixture. Select a mode by copying this
-//! executable to `<mode>.exe`; no production worker or credential flow uses it.
-#[cfg(not(any(windows, target_os = "macos")))]
+//! Native process-control regression fixture. Select a mode through the executable's
+//! file name; no production worker or credential flow uses it.
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn main() {}
 
 #[cfg(windows)]
@@ -114,7 +114,7 @@ fn main() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {
     use std::{
         io::{self, Write},
@@ -137,7 +137,14 @@ fn main() {
         "nonzero" => {
             std::process::exit(1);
         }
-        _ => panic!("unknown macOS pipe fixture"),
+        "forward" => {
+            use std::{ffi::OsString, os::unix::ffi::OsStringExt, os::unix::process::CommandExt};
+            let target =
+                OsString::from_vec(std::fs::read(executable.with_extension("target")).unwrap());
+            let error = std::process::Command::new(target).arg("--stdio").exec();
+            panic!("cannot exec the fixture's worker: {error}");
+        }
+        _ => panic!("unknown Unix pipe fixture"),
     }
     io::stdout().flush().unwrap();
     std::thread::sleep(Duration::from_secs(60));
