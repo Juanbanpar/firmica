@@ -89,17 +89,16 @@ def dialog(automation, page, selector, filename):
     native = automation.window(class_name="#32770")
     native.wait("ready", timeout=15)
     native.set_focus()
-    # Address the native control directly; the CI host shares a desktop and cursor.
-    if filename is None:
-        native.child_window(control_id=2, class_name="Button").click()
-    else:
+    if filename is not None:
         edit = native.child_window(class_name="Edit")
         edit.wait("ready", timeout=15)
         edit.set_edit_text(str(filename))
         assert edit.window_text() == str(filename)
-        confirm = native.child_window(control_id=1, class_name="Button")
-        confirm.wait("ready", timeout=15)
-        confirm.click()
+    button = native.child_window(control_id=2 if filename is None else 1, class_name="Button")
+    button.wait("ready", timeout=15)
+    button.set_focus()
+    # click() sends control messages at (0, 0) by default; use the client centre.
+    button.click(coords=button.client_rect().mid_point())
     native.wait_not("visible", timeout=15)
 
 
