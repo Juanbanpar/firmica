@@ -109,7 +109,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       const env = {...process.env, GDK_BACKEND:'x11', XDG_RUNTIME_DIR:runtime, XDG_SESSION_TYPE:'x11', LC_ALL:'C.UTF-8',
         XDG_DATA_HOME:data, XDG_CONFIG_HOME:config, XDG_CACHE_HOME:path.join(dir,'cache'), PATH:`${path.dirname(binary)}:${process.env.PATH}`, WEBKIT_INSPECTOR_HTTP_SERVER:`127.0.0.1:${port}`};
       execFileSync('update-desktop-database',[path.join(data,'applications')],{env});
-      child = spawn('xvfb-run',['-a','-s','-screen 0 1280x1100x24','sh','-c','openbox >/dev/null 2>&1 & exec "$@"','test-wm',
+      child = spawn('xvfb-run',['-a','-s','-screen 0 1280x1100x24','sh','-c','openbox >/dev/null & exec "$@"','test-wm',
         'dbus-run-session','--config-file',bus,'--','sh','-c',
         'printf "%s\n%s\n%s\n%s" "$DISPLAY" "$XAUTHORITY" "$DBUS_SESSION_BUS_ADDRESS" "$$" > "$1"; shift; exec "$@"',
         'browser-test',path.join(dir,'display'),binary,...flags],
@@ -119,6 +119,8 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       const [display,authority,busAddress,appPid] = (await readFile(path.join(dir,'display'),'utf8')).split('\n');
       xenv = {...env,DISPLAY:display,XAUTHORITY:authority,DBUS_SESSION_BUS_ADDRESS:busAddress};
       const xdo = args => execFileSync('xdotool',args,{env:xenv,encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();
+      // The WebView can be ready before the independently started window manager.
+      await until(() => Number(xdo(['getactivewindow'])) > 0);
       const click = selector => native.evaluate(`setTimeout(() => document.querySelector(${JSON.stringify(selector)}).click(), 0); true`);
       const workers = async () => {
         const tasks = await readdir(`/proc/${appPid}/task`);
