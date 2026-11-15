@@ -407,22 +407,9 @@ fn registration_under_standard_account() {
         let tools: serde_json::Value =
             serde_json::from_slice(&fs::read(staged.join("tools.json")).unwrap()).unwrap();
         let python = Path::new(tools["python"].as_str().unwrap());
-        let openssl = Path::new(tools["openssl"].as_str().unwrap());
         let paths = std::env::join_paths(
-            [
-                openssl.parent().unwrap().to_owned(),
-                python.parent().unwrap().to_owned(),
-                Path::new(tools["pdfsig"].as_str().unwrap())
-                    .parent()
-                    .unwrap()
-                    .to_owned(),
-                Path::new(tools["xmlsec1"].as_str().unwrap())
-                    .parent()
-                    .unwrap()
-                    .to_owned(),
-            ]
-            .into_iter()
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            std::iter::once(python.parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
         let (application_process, pid, port, application) = native_application(staged);
@@ -562,6 +549,15 @@ fn registration_under_standard_account() {
         .canonicalize()
         .unwrap();
     assert!(packaged.is_file());
+    // The staged Rust test now shares the OpenSSL-backed fixture generator.
+    // Keep its loader dependencies private instead of changing the logon's PATH.
+    for name in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
+        fs::copy(
+            packaged.parent().unwrap().join(name),
+            temporary.path().join(name),
+        )
+        .unwrap();
+    }
     copy_bundle(
         packaged.parent().unwrap(),
         &temporary.path().join("Bundle space & 'apostrophe'"),
@@ -580,13 +576,9 @@ fn registration_under_standard_account() {
         Command::new("python").args(["-c", "import sys; print(sys.executable)"]),
         15,
     );
-    let openssl = checked(Command::new("where.exe").arg("openssl"), 15);
-    let pdfsig = checked(Command::new("where.exe").arg("pdfsig"), 15);
-    let xmlsec = checked(Command::new("where.exe").arg("xmlsec1"), 15);
     fs::write(
         temporary.path().join("tools.json"),
-        serde_json::json!({"python":python.trim(),"openssl":openssl.lines().next().unwrap(),"pdfsig":pdfsig.lines().next().unwrap(),"xmlsec1":xmlsec.lines().next().unwrap()})
-            .to_string(),
+        serde_json::json!({"python":python.trim()}).to_string(),
     )
     .unwrap();
     checked(
