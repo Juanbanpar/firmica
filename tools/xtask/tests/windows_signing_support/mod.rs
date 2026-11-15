@@ -113,6 +113,6 @@ pub fn verify(config: &Value, suite: &str, directory: &Path, evidence: &Path) {
     .collect::<serde_json::Map<_, _>>();
     support::report(
         &evidence.join("verification.json"),
-        &json!({"passed":true,"cases":config[suite].as_array().unwrap().len(),"tools":tools}),
+        &json!({"passed":true,"cases":config[suite].as_array().unwrap().len(),"tools":tools,"xmlsec_crypto":"openssl"}),
     );
 }

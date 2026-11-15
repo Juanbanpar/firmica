@@ -200,9 +200,15 @@ pub fn verify(
             );
             // XMLSec 1.3 resolves X509Data through its certificate store in strict
             // mode. Trust only the already pinned synthetic fixture certificate.
+            let mut xmlsec = Command::new("xmlsec1");
+            xmlsec.arg("--verify");
+            // MSYS2 defaults to legacy CryptoAPI. Use its OpenSSL backend for
+            // explicit PEM trust and P-256, without consulting Windows stores.
+            #[cfg(windows)]
+            xmlsec.args(["--crypto", "openssl"]);
             checked(
-                Command::new("xmlsec1")
-                    .args(["--verify", "--trusted-pem"])
+                xmlsec
+                    .args(["--trusted-pem"])
                     .arg(certificate)
                     .args([
                         "--enabled-reference-uris",
