@@ -202,7 +202,7 @@ pub fn verify(
             // mode. Trust only the already pinned synthetic fixture certificate.
             let mut xmlsec = Command::new("xmlsec1");
             xmlsec.arg("--verify");
-            // MSYS2 defaults to legacy CryptoAPI. Use its OpenSSL backend for
+            // MSYS2 can default to Windows CNG. Use its OpenSSL backend for
             // explicit PEM trust and P-256, without consulting Windows stores.
             #[cfg(windows)]
             xmlsec.args(["--crypto", "openssl"]);
