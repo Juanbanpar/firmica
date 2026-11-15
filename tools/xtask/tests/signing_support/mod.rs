@@ -161,7 +161,7 @@ pub fn verify(
                     .arg(&image),
                 30,
             );
-            assert!(image.with_extension("png").metadata().unwrap().len() > 1000);
+            assert!(image.with_added_extension("png").metadata().unwrap().len() > 1000);
             if case["visible"] == true
                 || case["properties"]
                     .as_str()
@@ -178,8 +178,8 @@ pub fn verify(
                     30,
                 );
                 assert_ne!(
-                    fs::read(image.with_extension("png")).unwrap(),
-                    fs::read(baseline.with_extension("png")).unwrap(),
+                    fs::read(image.with_added_extension("png")).unwrap(),
+                    fs::read(baseline.with_added_extension("png")).unwrap(),
                     "visible appearance did not render"
                 );
             }
