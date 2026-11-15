@@ -462,15 +462,6 @@ fn registration_under_standard_account() {
                 .unwrap();
         assert_eq!(signed["passed"], true);
         assert_eq!(signed["administrator"], false);
-        let fixtures = staged.join("signing-fixtures");
-        let config =
-            serde_json::from_slice(&fs::read(fixtures.join("cases.json")).unwrap()).unwrap();
-        windows_signing_support::verify(
-            &config,
-            "local",
-            &fixtures,
-            &staged.join("native-signing"),
-        );
         support::report(
             &staged.join("result.json"),
             &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"packaged_tls_and_registration":true,"interactive_signing":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
@@ -729,6 +720,16 @@ fn registration_under_standard_account() {
     assert!(
         temporary.path().join("result.json").is_file(),
         "standard-account child did not run"
+    );
+    let fixtures = temporary.path().join("signing-fixtures");
+    let config = serde_json::from_slice(&fs::read(fixtures.join("cases.json")).unwrap()).unwrap();
+    // Verify after the unprivileged UI driver exits, using the administrator's
+    // reference-tool PATH. Never expose that environment to the test logon.
+    windows_signing_support::verify(
+        &config,
+        "local",
+        &fixtures,
+        &evidence.join("native-signing"),
     );
     drop(account);
 }
