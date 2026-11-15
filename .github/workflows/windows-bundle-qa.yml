@@ -44,6 +44,16 @@ jobs:
           if ($archives.Count -ne 1) { throw 'expected exactly one portable bundle' }
           Expand-Archive $archives[0].FullName "$env:RUNNER_TEMP/firmica-portable"
           "Bundle source: $source" | Tee-Object -FilePath bundle-source.txt
+      - name: Install independent Windows signature verifiers
+        id: reference-tools
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-poppler mingw-w64-ucrt-x86_64-xmlsec
+      - name: Add signature verifiers to the test environment
+        shell: pwsh
+        run: '"PATH=$env:PATH;${{ steps.reference-tools.outputs.msys2-location }}/ucrt64/bin" >> $env:GITHUB_ENV'
       - name: Install native UI test tooling
         run: python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
       - name: Update the Evergreen WebView2 Runtime
@@ -74,19 +84,17 @@ jobs:
           $env:FIRMICA_TEST_APP = "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
           cargo test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'standard-account registration or native signing failed' }
-          python -u tests/interop/windows-signing.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'native signing test failed' }
           python -m playwright install firefox
           if ($LASTEXITCODE -ne 0) { throw 'Firefox installation failed' }
-          python -u tests/interop/windows-browser.py --app "$env:RUNNER_TEMP/firmica-portable/firmica.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'browser signing test failed' }
+          cargo test --locked -p xtask --test windows_formats -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Windows format acceptance failed' }
       - name: Save native evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-bundle-qa
           path: |
-            .test-artifacts/windows-signing/
+            .test-artifacts/windows-local/
             .test-artifacts/windows-browser/
             .test-artifacts/windows-standard-account/
             .test-artifacts/windows-runtime/

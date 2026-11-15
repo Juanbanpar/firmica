@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Firefox AutoScript / protocol 4.1 -> registered Windows handler -> native CAdES consent."""
+"""Firefox AutoScript / protocol 4.1 -> registered Windows handler -> native signing consent."""
 import argparse
 import base64
 import contextlib
-import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -20,13 +19,12 @@ from windows_gui import free_port, wait_for, windows_for
 import windows_gui
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTENT = b"Windows browser signing\x00\xff\r\n"
-PASSWORD = "synthetic-browser-password"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
+    parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".test-artifacts/windows-browser"))
     options = parser.parse_args()
     if platform.system() != "Windows":
@@ -48,6 +46,8 @@ def main():
             pass
     if windows_gui.processes(name="firmica.exe"):
         raise RuntimeError("another Firmica process is already running")
+    fixtures = options.fixtures.resolve(strict=True)
+    cases = json.loads((fixtures / "cases.json").read_text())
     app = options.app.resolve(strict=True)
     options.output.mkdir(parents=True, exist_ok=True)
     evidence = {"platform": platform.platform(), "passed": False, "checks": []}
@@ -73,39 +73,28 @@ def main():
                 raise RuntimeError(completed.stdout + completed.stderr)
             return completed.stdout
 
-        for algorithm in ("rsa", "ec"):
-            specification = ["rsa:2048"] if algorithm == "rsa" else ["ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-            openssl("req", "-x509", "-newkey", *specification, "-noenc", "-days", "1",
-                    "-subj", "/CN=Firmica synthetic browser signer", "-addext", "basicConstraints=critical,CA:FALSE",
-                    "-addext", "keyUsage=critical,digitalSignature", "-keyout", f"{algorithm}.key", "-out", f"{algorithm}.pem")
-            openssl("pkcs12", "-export", "-inkey", f"{algorithm}.key", "-in", f"{algorithm}.pem",
-                    "-out", f"{algorithm}.p12", "-passout", f"pass:{PASSWORD}")
-        (directory / "original.bin").write_bytes(CONTENT)
         # Reuse the existing pinned downloader/checksum instead of maintaining a second pin.
         script = subprocess.check_output(["node", "--input-type=module", "--eval",
                                           "import {autoscript} from './tests/interop/autoscript.mjs'; process.stdout.write(await autoscript());"],
                                          cwd=ROOT, timeout=120)
         protocol41 = (ROOT / "tests/interop/protocol41-client.js").read_bytes()
         protocol_port = free_port()
+        buttons = "".join(f'<button id="{case["name"]}">{case["name"]}</button>' for case in cases["browser"])
         html = ("""<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic Windows browser signing</title>
-<button id="rsa">RSA</button><button id="ec">P-256</button><button id="cancel">Cancel request</button>
-<button id="protocol41-rsa">Protocol 4.1 RSA</button><button id="protocol41-ec">Protocol 4.1 P-256</button><button id="protocol41-cancel">Protocol 4.1 cancel</button><button id="protocol41-worker-failure">Protocol 4.1 worker failure</button>
+BUTTONS
 <a id="warm" href="afirma://cosign?ver=4&amp;format=CAdES">Warm invocation</a>
 <script src="/autoscript.js"></script><script src="/protocol41.js"></script><script>
 AutoScript.enableProgressDialog(false); AutoScript.setPortRange(49152,49154); AutoScript.cargarAppAfirma();
 AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
-for (const id of ['rsa','ec','cancel']) document.getElementById(id).onclick = () => {
+for (const scenario of CASES) document.getElementById(scenario.name).onclick = () => {
  delete window.result;
- AutoScript.sign('CONTENT', id === 'ec' ? 'SHA256withECDSA' : 'SHA256withRSA', 'CAdES',
- id === 'ec' ? 'mode=implicit' : 'mode=explicit',
- (signature,certificate) => {window.result={signature,certificate};},
- (type,message,code) => {window.result={type,message,code};});
-};
-for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById('protocol41-'+id).onclick = () => {
- delete window.result;
- signProtocol41({port:PROTOCOL_PORT,content:'CONTENT',algorithm:id==='ec'?'ec':'rsa',format:'CAdES',properties:id==='ec'?'mode=implicit':'mode=explicit'})
- .then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'});
-};</script></html>""").replace("CONTENT", base64.b64encode(CONTENT).decode()).replace("PROTOCOL_PORT", str(protocol_port)).encode()
+ if (scenario.protocol==='4.1') {
+   signProtocol41({...scenario,port:PROTOCOL_PORT})
+   .then(result=>window.result=result).catch(()=>window.result={error:'Protocol 4.1 exchange failed'});
+ } else AutoScript.sign(scenario.content,scenario.algorithm==='ec'?'SHA256withECDSA':'SHA256withRSA',scenario.format,scenario.properties,
+ (signature,certificate)=>{window.result={signature,certificate};},
+ (type,message,code)=>{window.result={type,message,code};});
+};</script></html>""").replace("BUTTONS", buttons).replace("CASES", json.dumps([{key: case[key] for key in ("name", "protocol", "content", "algorithm", "format", "properties")} for case in cases["browser"]])).replace("PROTOCOL_PORT", str(protocol_port)).encode()
 
         class Site(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -197,39 +186,38 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
                 socket.on("framereceived", lambda payload: frames.append(("received", socket.url, payload)))
             browser_page.on("websocket", socket_started)
             browser_page.goto(origin)
-            browser_page.locator("#rsa").click()
-            # Only the actual browser-to-OS handler path may start Firmica.
-            deadline = time.monotonic() + 45
-            pid = None
-            while time.monotonic() < deadline:
-                candidates = windows_gui.processes(name="firmica.exe")
-                if len(candidates) == 1:
-                    pid = candidates[0]
-                    break
-                browser_page.wait_for_timeout(100)
-            assert pid is not None, "the browser did not cold-launch the registered handler"
-            observed = windows_gui.ObservedProcess(pid)
-            cleanup.callback(observed.close)
-            def terminate_application():
-                if observed.poll() is None:
-                    subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(observed.pid)],
-                                   capture_output=True, timeout=15, check=True)
-            cleanup.callback(terminate_application)
-            assert len(wait_for(lambda: windows_for(pid), observed)) == 1
-            automation = Application(backend="win32").connect(process=pid)
-            native_browser, native_page = windows_gui.connect(playwright, port, observed, evidence)
-            query = f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
-            launch_command = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
-            assert "--tls-cert" not in launch_command and "--tls-key" not in launch_command
-            evidence["checks"].append("Firefox cold-launches the registered app and its automatically loaded private TLS profile")
-            print("Registered handler cold-launched the native application", flush=True)
-            for scenario in ("rsa", "cancel", "ec", "protocol41-rsa", "protocol41-cancel", "protocol41-ec", "protocol41-worker-failure"):
-                raw = scenario.startswith("protocol41-")
-                operation = scenario.removeprefix("protocol41-")
-                algorithm = "ec" if operation == "ec" else "rsa"
-                if scenario != "rsa":
-                    # Each bootstrap admits one operation for its 120 s lifetime.
-                    # Let the listener expire before AutoScript probes/relaunches.
+            def connect_application():
+                # Only the actual browser-to-OS handler path may start Firmica.
+                deadline = time.monotonic() + 45
+                pid = None
+                while time.monotonic() < deadline:
+                    candidates = windows_gui.processes(name="firmica.exe")
+                    if len(candidates) == 1:
+                        pid = candidates[0]
+                        break
+                    browser_page.wait_for_timeout(100)
+                assert pid is not None, "the browser did not cold-launch the registered handler"
+                observed = windows_gui.ObservedProcess(pid)
+                cleanup.callback(observed.close)
+                def terminate_application(process=observed):
+                    if process.poll() is None:
+                        subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(process.pid)],
+                                       capture_output=True, timeout=15, check=True)
+                cleanup.callback(terminate_application)
+                assert len(wait_for(lambda: windows_for(pid), observed)) == 1
+                automation = Application(backend="win32").connect(process=pid)
+                native_browser, native_page = windows_gui.connect(playwright, port, observed, evidence)
+                query = f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
+                launch_command = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], text=True, timeout=15).strip()
+                assert "--tls-cert" not in launch_command and "--tls-key" not in launch_command
+                return observed, pid, automation, native_browser, native_page
+            for index, case in enumerate(cases["browser"]):
+                scenario = case["name"]
+                raw = case["protocol"] == "4.1"
+                operation = case["action"]
+                algorithm = case["algorithm"]
+                if index == 1:
+                    # Preserve warm reuse after an actual 120-second listener expiry.
                     previous = next(url for direction, url, payload in reversed(frames)
                                     if direction == "received" and payload == "OK")
                     previous_port = urlsplit(previous).port
@@ -245,9 +233,17 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
                             break
                         assert time.monotonic() < deadline, "the previous WSS listener did not expire"
                         browser_page.wait_for_timeout(1000)
-                    print("Previous listener expired; starting a fresh browser session", flush=True)
-                    browser_page.goto(origin)
-                    browser_page.locator(f"#{scenario}").click()
+                    evidence["checks"].append("a fresh browser bootstrap reuses the native process after actual listener expiry")
+                elif index > 1:
+                    assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
+                    subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(pid)], check=True, capture_output=True, timeout=15)
+                    observed.wait(timeout=10)
+                    native_browser.close()
+                browser_page.goto(origin)
+                browser_page.locator(f'[id="{scenario}"]').click()
+                if index != 1:
+                    observed, pid, automation, native_browser, native_page = connect_application()
+                    evidence["checks"].append(f"{scenario}: Firefox cold-launches the registered handler")
                 native_page.locator("#request-operation").wait_for()
                 assert native_page.locator("#request-version").inner_text() == ("4.1" if raw else "4")
                 print(f"Native review received: {scenario}", flush=True)
@@ -262,24 +258,29 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
                     browser_page.wait_for_function("window.result", timeout=30000)
                     response = browser_page.evaluate("window.result")
                     if raw:
-                        assert response["code"] == "err-11:=AF500001 - Operation cancelled by user", response
+                        assert response["code"] == "err-11:=AF500001 - Operation cancelled by user"
                     else:
-                        assert response["type"] == "es.gob.afirma.core.AOCancelledOperationException", response
+                        assert response["type"] == "es.gob.afirma.core.AOCancelledOperationException"
                     assert "signature" not in response
                     evidence["checks"].append(f"{scenario}: native rejection reaches the browser without opening a certificate worker")
                     continue
-                windows_gui.dialog(automation, native_page, "#sign-certificate", directory / f"{algorithm}.p12")
-                native_page.locator("#sign-password").fill(PASSWORD)
+                windows_gui.dialog(automation, native_page, "#sign-certificate", fixtures / f"{algorithm}.p12")
+                native_page.locator("#sign-password").fill(cases["password"])
                 native_page.locator("#sign-prepare").click()
                 native_page.locator("#sign-document-hash").wait_for()
-                assert native_page.locator("#sign-document-hash").inner_text() == hashlib.sha256(CONTENT).hexdigest()
+                assert native_page.locator("#sign-fingerprint").inner_text() == case["fingerprint"]
+                assert native_page.locator("#sign-review-format").inner_text().startswith(case["format"])
+                if case["visible"]:
+                    assert "Signed with Firmica" in native_page.locator("#sign-review-appearance").inner_text()
+                native_page.screenshot(path=str(options.output / f"review-{scenario}.png"), full_page=True)
+                assert native_page.locator("#sign-document-hash").inner_text() == case["hash"]
                 assert native_page.locator("#sign-save").is_disabled()
-                if operation == "rsa":
+                if operation == "sign":
                     browser_page.locator("#warm").click()
                     browser_page.wait_for_timeout(500)
                     assert windows_gui.processes(name="firmica.exe") == [pid]
                     assert len(windows_for(pid)) == 1
-                    assert native_page.locator("#sign-document-hash").inner_text() == hashlib.sha256(CONTENT).hexdigest()
+                    assert native_page.locator("#sign-document-hash").inner_text() == case["hash"]
                     assert native_page.locator("#sign-save").is_disabled()
                     evidence["checks"].append("warm browser URI delivery retains one window and cannot authorize or replace the reviewed document")
                 if operation == "worker-failure":
@@ -291,25 +292,25 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
                 browser_page.wait_for_function("window.result", timeout=30000)
                 response = browser_page.evaluate("window.result")
                 if operation == "worker-failure":
-                    assert response["code"] == "err-00:=AF200115 - Signing failed", response
+                    if raw:
+                        assert response["code"] == "err-00:=AF200115 - Signing failed"
+                    else:
+                        assert response["type"] == "java.lang.Exception"
+                        assert response["code"].startswith("SAF_09:")
                     assert "signature" not in response
                     assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
-                    evidence["checks"].append("protocol 4.1 worker failure returns no signature")
+                    evidence["checks"].append(f"{scenario}: worker failure returns no signature")
                     continue
-                assert "type" not in response, response
-                assert base64.urlsafe_b64decode(response["certificate"]) == openssl("x509", "-in", f"{algorithm}.pem", "-outform", "DER")
-                (directory / "result.csig").write_bytes(base64.urlsafe_b64decode(response["signature"]))
-                arguments = ["cms", "-verify", "-cades", "-binary", "-inform", "DER", "-in", "result.csig",
-                             "-CAfile", f"{algorithm}.pem", "-no-CApath", "-no-CAstore", "-partial_chain", "-purpose", "any", "-out", "verified.bin"]
-                if algorithm == "rsa":
-                    arguments += ["-content", "original.bin"]
-                openssl(*arguments)
-                assert (directory / "verified.bin").read_bytes() == CONTENT
+                assert "type" not in response and "error" not in response, "browser signing failed"
+                assert base64.urlsafe_b64decode(response["certificate"]) == (fixtures / f"{algorithm}.der").read_bytes()
                 assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
+                destination = Path(case["output"])
+                assert not destination.exists()
+                destination.write_bytes(base64.urlsafe_b64decode(response["signature"]))
                 assert windows_gui.processes(name="firmica.exe") == [pid]
-                evidence["checks"].append(f"{scenario} browser signature and selected certificate verify after worker exit")
-                print(f"OpenSSL verified the {scenario} browser signature", flush=True)
-                if scenario == "rsa":
+                evidence["checks"].append(f"{scenario}: browser signature and reviewed certificate returned after worker exit")
+                print(f"Browser signing completed: {scenario}", flush=True)
+                if index == 0:
                     untrusted = playwright.firefox.launch(headless=True, env=environment)
                     try:
                         fresh = untrusted.new_page()
@@ -330,7 +331,6 @@ for (const id of ['rsa','ec','cancel','worker-failure']) document.getElementById
             native_page.screenshot(path=str(options.output / "native.png"), full_page=True)
             browser_page.screenshot(path=str(options.output / "browser.png"), full_page=True)
             evidence["checks"].append("unmodified AutoScript uses trusted loopback WSS without disabling TLS verification")
-            evidence["checks"].append("fresh browser bootstraps reuse the native process after listener expiry")
             evidence["protocols"] = ["4", "4.1"]
             browser.close()
             browser = None

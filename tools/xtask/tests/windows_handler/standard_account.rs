@@ -412,6 +412,14 @@ fn registration_under_standard_account() {
             [
                 openssl.parent().unwrap().to_owned(),
                 python.parent().unwrap().to_owned(),
+                Path::new(tools["pdfsig"].as_str().unwrap())
+                    .parent()
+                    .unwrap()
+                    .to_owned(),
+                Path::new(tools["xmlsec1"].as_str().unwrap())
+                    .parent()
+                    .unwrap()
+                    .to_owned(),
             ]
             .into_iter()
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
@@ -421,6 +429,8 @@ fn registration_under_standard_account() {
         let result = output(
             Command::new(python)
                 .arg(staged.join("windows-signing.py"))
+                .arg("--fixtures")
+                .arg(staged.join("signing-fixtures"))
                 .arg("--app")
                 .arg(application)
                 .arg("--attach-pid")
@@ -452,6 +462,15 @@ fn registration_under_standard_account() {
                 .unwrap();
         assert_eq!(signed["passed"], true);
         assert_eq!(signed["administrator"], false);
+        let fixtures = staged.join("signing-fixtures");
+        let config =
+            serde_json::from_slice(&fs::read(fixtures.join("cases.json")).unwrap()).unwrap();
+        windows_signing_support::verify(
+            &config,
+            "local",
+            &fixtures,
+            &staged.join("native-signing"),
+        );
         support::report(
             &staged.join("result.json"),
             &serde_json::json!({"passed":true,"administrator":false,"filtered_administrator":false,"machine_registry_write_denied":true,"packaged_tls_and_registration":true,"interactive_signing":true,"registration":"install/status/uninstall, ownership, collisions and quoting"}),
@@ -563,14 +582,19 @@ fn registration_under_standard_account() {
         )
         .unwrap();
     }
+    let fixtures = temporary.path().join("signing-fixtures");
+    fs::create_dir(&fixtures).unwrap();
+    windows_signing_support::fixtures(&fixtures);
     let python = checked(
         Command::new("python").args(["-c", "import sys; print(sys.executable)"]),
         15,
     );
     let openssl = checked(Command::new("where.exe").arg("openssl"), 15);
+    let pdfsig = checked(Command::new("where.exe").arg("pdfsig"), 15);
+    let xmlsec = checked(Command::new("where.exe").arg("xmlsec1"), 15);
     fs::write(
         temporary.path().join("tools.json"),
-        serde_json::json!({"python":python.trim(),"openssl":openssl.lines().next().unwrap()})
+        serde_json::json!({"python":python.trim(),"openssl":openssl.lines().next().unwrap(),"pdfsig":pdfsig.lines().next().unwrap(),"xmlsec1":xmlsec.lines().next().unwrap()})
             .to_string(),
     )
     .unwrap();

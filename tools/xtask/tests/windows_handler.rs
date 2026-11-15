@@ -1,5 +1,7 @@
 #![cfg(windows)]
+mod signing_support;
 mod support;
+mod windows_signing_support;
 #[path = "windows_handler/standard_account.rs"]
 mod windows_standard_account;
 use std::{
