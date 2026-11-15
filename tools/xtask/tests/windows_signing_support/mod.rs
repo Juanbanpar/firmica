@@ -29,13 +29,18 @@ pub fn fixtures(directory: &Path) -> Value {
             let name = format!("{algorithm}-{mode}");
             let document = directory.join(format!("{name}.input"));
             fs::write(&document, content).unwrap();
+            let extension = match mode {
+                "cades" => "csig",
+                "pades" | "pades-visible" => "pdf",
+                _ => "xsig",
+            };
             local.push(json!({
                 "name":name,"algorithm":algorithm,"mode":if mode=="pades-visible" {"pades"} else {mode},
                 "visible":mode=="pades-visible","document":document,
                 "certificate":directory.join(format!("{algorithm}.p12")),
                 "content":STANDARD.encode(content),"hash":format!("{:x}",Sha256::digest(content)),
                 "fingerprint":support::sha256(&directory.join(format!("{algorithm}.der"))),
-                "output":directory.join(format!("{name}.signed")),
+                "output":directory.join(format!("{name}.{extension}")),
                 "format":match mode {"cades"=>"CAdES","pades"|"pades-visible"=>"PAdES",_=>"XAdES"},
                 "attached":mode=="cades" && algorithm=="ec",
                 "properties":match mode {
