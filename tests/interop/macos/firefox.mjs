@@ -59,6 +59,10 @@ try {
       console.log('The fresh profile rejected the signing listener certificate');
     }
     await get('/started');
+    // XCTest opens a real file dialog before preparing the frozen review. Start
+    // response/disconnection checks after that handoff, for every scenario.
+    await until(async () => (await get('/state')).prepared, 60000);
+    console.log(`Native review prepared for browser case ${index}`);
     if (index === 0 || (scenario.protocol === '4.1' && config.browser[index - 1]?.protocol !== '4.1')) {
       await until(async () => (await get('/state')).hidden, 45000);
       await page.bringToFront();
@@ -67,7 +71,6 @@ try {
     }
     let result;
     if (scenario.action === 'disconnect') {
-      await until(async () => (await get('/state')).prepared, 45000);
       await page.close();
       result = { disconnected: true };
     } else {
