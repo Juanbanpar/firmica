@@ -94,6 +94,18 @@ jobs:
       - name: Build Windows portable application and native worker
         if: runner.os == 'Windows'
         run: cargo xtask bundle --debug
+      - name: Install independent Windows signature verifiers
+        if: runner.os == 'Windows'
+        id: reference-tools
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-poppler mingw-w64-ucrt-x86_64-xmlsec
+      - name: Add signature verifiers to the test environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"PATH=$env:PATH;${{ steps.reference-tools.outputs.msys2-location }}/ucrt64/bin" >> $env:GITHUB_ENV'
       - name: Verify per-user Windows handler registration
         if: runner.os == 'Windows'
         env:
@@ -128,12 +140,11 @@ jobs:
           $archive = $archive[0]
           $destination = Join-Path $env:RUNNER_TEMP 'firmica-portable'
           Expand-Archive $archive.FullName $destination
-          python -u tests/interop/windows-signing.py --app "$destination\firmica.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'native signing test failed' }
           python -m playwright install firefox
           if ($LASTEXITCODE -ne 0) { throw 'Firefox installation failed' }
-          python -u tests/interop/windows-browser.py --app "$destination\firmica.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'browser signing test failed' }
+          $env:FIRMICA_TEST_APP = "$destination\firmica.exe"
+          cargo +stable test --locked -p xtask --test windows_formats -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Windows format acceptance failed' }
       - name: Save Windows invocation and signing evidence
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -141,7 +152,7 @@ jobs:
           name: windows-invocation
           path: |
             .test-artifacts/windows/
-            .test-artifacts/windows-signing/
+            .test-artifacts/windows-local/
             .test-artifacts/windows-browser/
             .test-artifacts/windows-standard-account/
             target/dx/firmica/bundle/windows/*.zip

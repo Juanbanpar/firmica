@@ -1,5 +1,6 @@
 #![cfg(target_os = "macos")]
 mod macos_support;
+mod signing_support;
 mod support;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -281,6 +282,7 @@ fn extracted_bundle_signs_local_documents_and_browser_requests() {
             Path::new(case["output"].as_str().unwrap()),
             &certificates,
             fixtures,
+            &output_dir,
         );
     }
     for (index, case) in configuration["browser"]
@@ -307,7 +309,7 @@ fn extracted_bundle_signs_local_documents_and_browser_requests() {
                     macos_support::decode(result["signature"].as_str().unwrap()),
                 )
                 .unwrap();
-                macos_support::verify(case, &path, &certificates, fixtures);
+                macos_support::verify(case, &path, &certificates, fixtures, &output_dir);
             }
             "cancel" => {
                 assert!(result["signature"].is_null());

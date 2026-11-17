@@ -2,7 +2,6 @@
 """Exercise native Windows file dialogs, consent and controlled-worker signing."""
 import argparse
 import contextlib
-import hashlib
 import http.client
 import json
 from pathlib import Path
@@ -20,6 +19,7 @@ import windows_gui
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
+    parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".test-artifacts/windows-signing"))
     parser.add_argument("--require-standard-account", action="store_true")
     parser.add_argument("--attach-pid", type=int)
@@ -41,8 +41,9 @@ def main():
     if args.require_standard_account:
         assert not administrator, "native signing must run as the standard account"
     result = {"platform": platform.platform(), "administrator": administrator, "passed": False, "checks": []}
-    password = "synthetic-desktop-password"
-    content = b"Windows frozen signing\x00\xff\r\n"
+    fixtures = args.fixtures.resolve(strict=True)
+    cases = json.loads((fixtures / "cases.json").read_text())
+    password = cases["password"]
     process = None
     with tempfile.TemporaryDirectory(prefix="firmica-signing-") as temporary, (args.output / "application.log").open("w") as log, contextlib.ExitStack() as cleanup:
         directory = Path(temporary)
@@ -50,21 +51,6 @@ def main():
             copied = directory / "application"
             shutil.copytree(app.parent, copied)
             app = (copied / app.name).rename(copied / f"firmica-qa-{uuid.uuid4().hex}.exe")
-        document = directory / "document.bin"
-        document.write_bytes(content)
-        for algorithm in ("rsa", "ec"):
-            key = ["rsa:2048"] if algorithm == "rsa" else ["ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-            subprocess.run([
-                "openssl", "req", "-x509", "-newkey", *key, "-noenc", "-days", "1",
-                "-subj", "/CN=Firmica synthetic Windows signer",
-                "-addext", "keyUsage=critical,digitalSignature", "-addext", "basicConstraints=critical,CA:FALSE",
-                "-keyout", str(directory / f"{algorithm}.key"), "-out", str(directory / f"{algorithm}.pem"),
-            ], check=True, capture_output=True, timeout=30)
-            subprocess.run([
-                "openssl", "pkcs12", "-export", "-inkey", str(directory / f"{algorithm}.key"),
-                "-in", str(directory / f"{algorithm}.pem"), "-out", str(directory / f"{algorithm}.p12"),
-                "-passout", f"pass:{password}",
-            ], check=True, capture_output=True, timeout=30)
         port = args.debug_port or free_port()
         environment = cleanup.enter_context(windows_gui.debugging(app, port, directory))
         try:
@@ -85,12 +71,16 @@ def main():
                 def dialog(selector, filename):
                     windows_gui.dialog(automation, page, selector, filename)
 
-                def prepare(algorithm="rsa", secret=password, attached=False):
-                    dialog("#sign-document", document)
-                    dialog("#sign-certificate", directory / f"{algorithm}.p12")
+                def prepare(case=cases["local"][0], secret=password):
+                    dialog("#sign-document", Path(case["document"]))
+                    dialog("#sign-certificate", Path(case["certificate"]))
                     page.locator("#sign-password").fill(secret)
-                    page.locator("#sign-algorithm").select_option(algorithm)
-                    page.locator("#sign-attached").set_checked(attached)
+                    page.locator("#sign-algorithm").select_option(case["algorithm"])
+                    page.locator("#sign-format").select_option(case["mode"])
+                    if case["mode"] == "cades":
+                        page.locator("#sign-attached").set_checked(case["attached"])
+                    if case["mode"] == "pades":
+                        page.locator("#sign-visible").set_checked(case["visible"])
                     page.locator("#sign-prepare").click()
 
                 prepare(secret="wrong synthetic password")
@@ -106,32 +96,30 @@ def main():
                 wait_for(lambda: status() == "Operation cancelled.", process)
                 assert not workers()
                 result["checks"].append("consent is required and cancellation closes the worker")
-                for algorithm, attached in (("rsa", False), ("ec", True)):
-                    document.write_bytes(content)
-                    prepare(algorithm, attached=attached)
+                for case in cases["local"]:
+                    prepare(case)
                     page.locator("#sign-document-hash").wait_for()
-                    assert page.locator("#sign-document-hash").inner_text() == hashlib.sha256(content).hexdigest()
+                    assert page.locator("#sign-document-hash").inner_text() == case["hash"]
+                    assert page.locator("#sign-fingerprint").inner_text() == case["fingerprint"]
+                    assert page.locator("#sign-review-format").inner_text().startswith(case["format"])
+                    if case["visible"]:
+                        assert "Signed with Firmica" in page.locator("#sign-review-appearance").inner_text()
+                    assert page.locator("#sign-save").is_disabled()
                     assert page.locator("#sign-password").count() == 0
-                    document.write_bytes(b"changed after review")
+                    Path(case["document"]).write_bytes(b"changed after review")
+                    page.screenshot(path=str(args.output / f"review-{case['name']}.png"), full_page=True)
                     page.locator("#sign-acknowledge").check()
                     dialog("#sign-save", None)
                     assert page.locator("#sign-document-hash").count() == 1
                     assert len(workers()) == 1
-                    destination = directory / f"{algorithm}.csig"
+                    destination = Path(case["output"])
+                    assert not destination.exists()
                     dialog("#sign-save", destination)
                     wait_for(lambda: status() == "Signature saved.", process)
                     assert not workers(), "worker must exit before publication"
-                    original = directory / "original.bin"
-                    original.write_bytes(content)
-                    command = ["openssl", "cms", "-verify", "-cades", "-binary", "-inform", "DER",
-                               "-in", str(destination), "-CAfile", str(directory / f"{algorithm}.pem"),
-                               "-no-CApath", "-no-CAstore", "-partial_chain", "-purpose", "any",
-                               "-out", str(directory / "verified.bin")]
-                    if not attached:
-                        command += ["-content", str(original)]
-                    subprocess.run(command, check=True, capture_output=True, timeout=30)
-                    assert (directory / "verified.bin").read_bytes() == content
-                    result["checks"].append(f"{algorithm} {'attached' if attached else 'detached'} CAdES verifies with OpenSSL after native save and worker exit")
+                    assert destination.is_file()
+                    result["checks"].append(f"{case['name']}: frozen review, consent, save cancellation and worker exit before publication")
+                    print(f"Native signing completed: {case['name']}", flush=True)
                 page.screenshot(path=str(args.output / "signed.png"), full_page=True)
                 result["passed"] = True
         except Exception as error:

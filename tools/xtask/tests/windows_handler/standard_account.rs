@@ -407,20 +407,17 @@ fn registration_under_standard_account() {
         let tools: serde_json::Value =
             serde_json::from_slice(&fs::read(staged.join("tools.json")).unwrap()).unwrap();
         let python = Path::new(tools["python"].as_str().unwrap());
-        let openssl = Path::new(tools["openssl"].as_str().unwrap());
         let paths = std::env::join_paths(
-            [
-                openssl.parent().unwrap().to_owned(),
-                python.parent().unwrap().to_owned(),
-            ]
-            .into_iter()
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            std::iter::once(python.parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
         .unwrap();
         let (application_process, pid, port, application) = native_application(staged);
         let result = output(
             Command::new(python)
                 .arg(staged.join("windows-signing.py"))
+                .arg("--fixtures")
+                .arg(staged.join("signing-fixtures"))
                 .arg("--app")
                 .arg(application)
                 .arg("--attach-pid")
@@ -552,6 +549,15 @@ fn registration_under_standard_account() {
         .canonicalize()
         .unwrap();
     assert!(packaged.is_file());
+    // The staged Rust test now shares the OpenSSL-backed fixture generator.
+    // Keep its loader dependencies private instead of changing the logon's PATH.
+    for name in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
+        fs::copy(
+            packaged.parent().unwrap().join(name),
+            temporary.path().join(name),
+        )
+        .unwrap();
+    }
     copy_bundle(
         packaged.parent().unwrap(),
         &temporary.path().join("Bundle space & 'apostrophe'"),
@@ -563,15 +569,16 @@ fn registration_under_standard_account() {
         )
         .unwrap();
     }
+    let fixtures = temporary.path().join("signing-fixtures");
+    fs::create_dir(&fixtures).unwrap();
+    windows_signing_support::fixtures(&fixtures);
     let python = checked(
         Command::new("python").args(["-c", "import sys; print(sys.executable)"]),
         15,
     );
-    let openssl = checked(Command::new("where.exe").arg("openssl"), 15);
     fs::write(
         temporary.path().join("tools.json"),
-        serde_json::json!({"python":python.trim(),"openssl":openssl.lines().next().unwrap()})
-            .to_string(),
+        serde_json::json!({"python":python.trim()}).to_string(),
     )
     .unwrap();
     checked(
@@ -705,6 +712,16 @@ fn registration_under_standard_account() {
     assert!(
         temporary.path().join("result.json").is_file(),
         "standard-account child did not run"
+    );
+    let fixtures = temporary.path().join("signing-fixtures");
+    let config = serde_json::from_slice(&fs::read(fixtures.join("cases.json")).unwrap()).unwrap();
+    // Verify after the unprivileged UI driver exits, using the administrator's
+    // reference-tool PATH. Never expose that environment to the test logon.
+    windows_signing_support::verify(
+        &config,
+        "local",
+        &fixtures,
+        &evidence.join("native-signing"),
     );
     drop(account);
 }
