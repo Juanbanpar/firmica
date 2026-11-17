@@ -52,6 +52,8 @@ jobs:
           name: ios-invocation
           path: |
             .test-artifacts/ios/result.json
+            .test-artifacts/ios/runtime-discovery.json
+            .test-artifacts/ios/runtimes.json
             .test-artifacts/ios/Info.plist
             .test-artifacts/ios/xcodebuild.log
             .test-artifacts/ios/simulator.log

@@ -76,11 +76,31 @@ fn safari_cold_warm_invocation_and_review() {
         fs::remove_file(&result).unwrap();
     }
     fs::copy(app.join("Info.plist"), output_dir.join("Info.plist")).unwrap();
-    let runtimes: Value = serde_json::from_str(&checked(
+    // The first simctl call also mounts the runner's runtime images. A cold
+    // CoreSimulator scan can exceed two minutes (actions/runner-images#15247).
+    let discovery_started = std::time::Instant::now();
+    let discovery = support::try_output(
         Command::new("xcrun").args(["simctl", "list", "runtimes", "--json"]),
-        60,
-    ))
-    .unwrap();
+        180,
+    );
+    support::report(
+        &output_dir.join("runtime-discovery.json"),
+        &json!({
+            "elapsed_ms":discovery_started.elapsed().as_millis(),
+            "deadline_seconds":180,
+            "developer_dir":env::var_os("DEVELOPER_DIR"),
+            "exit_code":discovery.as_ref().ok().and_then(|result|result.status.code()),
+            "error":discovery.as_ref().err().map(ToString::to_string),
+        }),
+    );
+    let discovery = discovery.expect("could not discover iOS Simulator runtimes");
+    fs::write(output_dir.join("runtimes.json"), &discovery.stdout).unwrap();
+    fs::write(output_dir.join("simulator.log"), &discovery.stderr).unwrap();
+    assert!(
+        discovery.status.success(),
+        "iOS runtime discovery failed; see simulator.log"
+    );
+    let runtimes: Value = serde_json::from_slice(&discovery.stdout).unwrap();
     let version = env::var("FIRMICA_TEST_IOS_RUNTIME").unwrap_or_else(|_| "18.5".into());
     let runtime = runtimes["runtimes"]
         .as_array()
