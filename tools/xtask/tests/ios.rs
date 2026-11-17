@@ -88,7 +88,7 @@ fn safari_cold_warm_invocation_and_review() {
         &json!({
             "elapsed_ms":discovery_started.elapsed().as_millis(),
             "deadline_seconds":180,
-            "developer_dir":env::var_os("DEVELOPER_DIR"),
+            "developer_dir":env::var("DEVELOPER_DIR").ok(),
             "exit_code":discovery.as_ref().ok().and_then(|result|result.status.code()),
             "error":discovery.as_ref().err().map(ToString::to_string),
         }),
