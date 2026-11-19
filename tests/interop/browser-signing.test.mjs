@@ -261,12 +261,12 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         ws.onopen = () => ws.send(session); ws.onmessage = event => {clearTimeout(timer);ws.close();resolve(event.data);};
       }),{endpoint,session});
       assert.match(replay, protocol41 ? /^err-00:=AF600002 - / : /^SAF_04:/,'a result cannot be retrieved twice');
+      assert(!stderr.includes(password)); assert(!stderr.includes('BEGIN PRIVATE KEY')); assert(!stderr.includes('panicked at'));
       if (protocol41) {
-        const evidence = path.join(root,'.test-artifacts/protocol41');
+        const evidence = path.join(root,'.test-artifacts/protocol41',process.env.FIRMICA_DEB ? 'debian' : '');
         await mkdir(evidence,{recursive:true});
         await writeFile(path.join(evidence,`native-${operation}.json`), JSON.stringify({protocol:'4.1',scenario:operation,browser:browser.browser().version(),passed:true}));
       }
-      assert(!stderr.includes(password)); assert(!stderr.includes('BEGIN PRIVATE KEY')); assert(!stderr.includes('panicked at'));
     } catch (error) {
       console.error(error.message);
       console.error(stderr.slice(-4000));

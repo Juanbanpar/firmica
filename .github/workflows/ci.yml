@@ -210,6 +210,17 @@ jobs:
           name: protocol41-browsers
           path: .test-artifacts/protocol41/
           if-no-files-found: warn
+      - name: Save Linux invocation and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-invocation
+          path: |
+            .test-artifacts/linux-bundle/result.json
+            .test-artifacts/linux-os-handler/**/*.json
+            .test-artifacts/linux-os-handler/**/*.png
+            .test-artifacts/lifecycle/*.json
+          if-no-files-found: warn
 
   audit:
     runs-on: ubuntu-latest
