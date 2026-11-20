@@ -44,6 +44,7 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
     AutoScript.enableProgressDialog(false);
     AutoScript.setPortRange(49152, 49154);
     AutoScript.cargarAppAfirma();
+    AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
     document.querySelector('#sign').onclick = () => AutoScript.sign('c3ludGhldGljIHRlc3QgZG9jdW1lbnQ=', 'SHA256withRSA', 'CAdES', ${JSON.stringify('# Detached signature\nmode : explicit')},
       () => { window.operationResult = { unexpectedSuccess: true }; },
       (type, message, code) => { window.operationResult = { type, message, code }; document.querySelector('#result').textContent = type; });
