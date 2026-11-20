@@ -34,7 +34,7 @@ firmica-pades = { path = "crates/pades" }
 firmica-xades = { path = "crates/xades" }
 firmica-key-worker = { path = "crates/key-worker" }
 firmica-validation = { path = "crates/validation" }
-openssl = "0.10.81"
+openssl = "0.10.82"
 secrecy = "0.10.3"
 cryptoki = "0.12.1"
 thiserror = "2"

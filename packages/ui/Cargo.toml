@@ -7,5 +7,4 @@ edition = "2021"
 dioxus = { workspace = true }
 
 firmica-core.workspace = true
-firmica-protocol.workspace = true
 async-channel = "2"
