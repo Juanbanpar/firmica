@@ -32,8 +32,12 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
     const openssl = args => execFileSync('openssl', args, {cwd:dir, stdio:['ignore', 'pipe', 'pipe']});
     openssl(['req', '-new', '-x509', '-newkey', 'rsa:2048', '-noenc', '-keyout', 'rsa.key', '-out', 'rsa.pem', '-days', '1',
       '-subj', '/CN=Firmica synthetic RSA', '-addext', 'basicConstraints=critical,CA:FALSE', '-addext', 'keyUsage=critical,digitalSignature']);
+    // Exercise the FNMT Usuarios G2 usage extensions with a synthetic PKCS#12 identity.
     openssl(['req', '-new', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-noenc', '-keyout', 'ec.key', '-out', 'ec.pem', '-days', '1',
-      '-subj', '/CN=Firmica synthetic EC', '-addext', 'basicConstraints=critical,CA:FALSE', '-addext', 'keyUsage=critical,digitalSignature']);
+      '-subj', '/CN=Firmica synthetic EC', '-addext', 'basicConstraints=critical,CA:FALSE',
+      '-addext', 'keyUsage=critical,digitalSignature,nonRepudiation',
+      '-addext', 'extendedKeyUsage=clientAuth,1.3.6.1.4.1.311.10.3.12,1.2.840.113583.1.1.5',
+      '-addext', 'certificatePolicies=1.3.6.1.4.1.5734.3.20.1.0,0.4.0.194112.1.0']);
     for (const algorithm of ['rsa', 'ec']) {
       openssl(['pkcs12', '-export', '-inkey', `${algorithm}.key`, '-in', `${algorithm}.pem`, '-out', `${algorithm}.p12`, '-passout', `pass:${password}`]);
     }

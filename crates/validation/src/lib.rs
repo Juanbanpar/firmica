@@ -1,18 +1,23 @@
 //! Local restrictions on using a leaf certificate for document signing.
 //!
-//! Checks validity, key usage, extended key usage, basic constraints and private-key
-//! usage periods. Unhandled critical extensions block signing. This is **not** an
-//! RFC 5280 path validator: certificate signatures, issuer chains, trust anchors,
-//! revocation and legal qualification are not assessed. Subject and issuer names
-//! are untrusted certificate claims, even when no local restriction blocks signing.
+//! Checks validity, key usage, extended key usage, basic constraints, the DNIe
+//! authentication policy and private-key usage periods. Unhandled critical
+//! extensions block signing. The assessment leaves certificate signatures, issuer
+//! chains, trust anchors, revocation and legal qualification unchecked. Subject and
+//! issuer names are untrusted certificate claims.
 //!
-//! Absent KU/EKU extensions impose no restriction. When KU is present it must allow
-//! digitalSignature or contentCommitment. When EKU is present it must include
-//! id-kp-documentSigning (RFC 9336) or anyExtendedKeyUsage. TLS, code-signing and
-//! email-only purposes are not treated as permission to sign arbitrary documents.
-//! CA certificates and keys marked keyCertSign are excluded by application policy.
-//! See [RFC 5280 §4.2](https://www.rfc-editor.org/rfc/rfc5280#section-4.2)
-//! and [RFC 9336](https://www.rfc-editor.org/rfc/rfc9336).
+//! Firmica applies KU and EKU independently. If present, KU must allow
+//! digitalSignature or contentCommitment. If present, EKU must include
+//! id-kp-documentSigning, Microsoft Document Signing (used by FNMT citizen
+//! certificates), or anyExtendedKeyUsage.
+//! [RFC 5280 §4.2.1.12](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.12),
+//! [RFC 9336](https://www.rfc-editor.org/rfc/rfc9336), and
+//! [FNMT citizen profiles, §§3 and 5](https://www.sede.fnmt.gob.es/documents/10445900/10575386/perfiles_certificados_ac_usuarios.pdf).
+//!
+//! Application policy excludes CA certificates and keys marked keyCertSign. The
+//! DNIe authentication policy OID also blocks signing, including when EKU is absent.
+//! This uses the claimed policy only as a restriction.
+//! [DNIe certification practices v3.4, §§7.1.2 and 7.1.9](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.4.pdf).
 //!
 //! No files, network, native crypto libraries or system trust stores are accessed.
 //! The selected signing provider remains responsible for key/algorithm support and
@@ -28,7 +33,9 @@ use der::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, time::SystemTime};
 use x509_cert::{
-    ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, PrivateKeyUsagePeriod},
+    ext::pkix::{
+        BasicConstraints, CertificatePolicies, ExtendedKeyUsage, KeyUsage, PrivateKeyUsagePeriod,
+    },
     Certificate,
 };
 
@@ -36,7 +43,11 @@ use x509_cert::{
 pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 
 const DOCUMENT_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.36");
+const MICROSOFT_DOCUMENT_SIGNING: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.311.10.3.12");
 const ANY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37.0");
+const DNIE_AUTHENTICATION_POLICY: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("2.16.724.1.2.2.2.4");
 
 /// Checks deliberately outside the local assessment's scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,10 +74,10 @@ pub enum Restriction {
     /// Basic constraints or key usage designate a certification authority key.
     #[error("CA keys are not permitted for document signing")]
     CertificateAuthority,
-    /// KU is present without digitalSignature or contentCommitment.
+    /// KU omits both signing bits or the certificate declares the DNIe authentication policy.
     #[error("key usage does not permit document signing")]
     KeyUsage,
-    /// EKU is present without documentSigning or anyExtendedKeyUsage.
+    /// EKU is present without a recognized document-signing purpose or anyExtendedKeyUsage.
     #[error("extended key usage does not permit document signing")]
     ExtendedKeyUsage,
     /// A critical extension has not been processed by this assessment.
@@ -172,9 +183,9 @@ impl CertificateAssessment {
 ///
 /// # Errors
 /// Returns an error for oversize/noncanonical DER, any duplicate extension, an empty
-/// KU/EKU/private-key period, negative serial, or inverted validity/usage periods. Other blocking
-/// conditions are retained in [`CertificateAssessment::restrictions`]. The parser's
-/// UTCTime support begins in 1970; certificates with earlier UTCTime dates fail.
+/// KU/EKU/private-key period, malformed noncritical certificate policies, negative serial,
+/// or inverted validity/usage periods. Other blocking conditions are retained in
+/// [`CertificateAssessment::restrictions`]. The parser's UTCTime support begins in 1970.
 pub fn assess_document_signing(
     encoded: &[u8],
     now: SystemTime,
@@ -253,8 +264,35 @@ pub fn assess_document_signing(
                 if usage.0.is_empty() {
                     return Err(InvalidCertificate);
                 }
-                if !usage.0.contains(&DOCUMENT_SIGNING) && !usage.0.contains(&ANY_USAGE) {
+                if !usage.0.iter().any(|purpose| {
+                    matches!(
+                        *purpose,
+                        DOCUMENT_SIGNING | MICROSOFT_DOCUMENT_SIGNING | ANY_USAGE
+                    )
+                }) {
                     restrict(Restriction::ExtendedKeyUsage);
+                }
+            }
+            // A local purpose check cannot interpret critical certificate policy
+            // semantics. Leave critical policies to the unhandled-extension rule.
+            <CertificatePolicies as der::oid::AssociatedOid>::OID if !extension.critical => {
+                let policies = decode_constraint::<CertificatePolicies>(bytes)?;
+                let mut identifiers = BTreeSet::new();
+                if policies.0.is_empty() {
+                    return Err(InvalidCertificate);
+                }
+                for policy in policies.0 {
+                    if !identifiers.insert(policy.policy_identifier)
+                        || policy.policy_qualifiers.is_some_and(|qualifiers| {
+                            qualifiers.is_empty()
+                                || qualifiers.iter().any(|q| q.qualifier.is_none())
+                        })
+                    {
+                        return Err(InvalidCertificate);
+                    }
+                }
+                if identifiers.contains(&DNIE_AUTHENTICATION_POLICY) {
+                    restrict(Restriction::KeyUsage);
                 }
             }
             <PrivateKeyUsagePeriod as der::oid::AssociatedOid>::OID => {
