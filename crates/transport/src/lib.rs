@@ -49,7 +49,7 @@ pub enum TransportError {
     WebSocket(#[from] tungstenite::Error),
     #[error("handshake or request timed out")]
     Timeout,
-    #[error("an explicit HTTP(S) test origin is required")]
+    #[error("at least one exact HTTP(S) browser origin is required")]
     Origin,
 }
 

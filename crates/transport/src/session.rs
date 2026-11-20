@@ -7,6 +7,7 @@ pub(super) struct Session {
     pub(super) bootstrap: WebSocketBootstrap,
     pub(super) used: bool,
     pub(super) result: Option<oneshot::Receiver<Decision>>,
+    origin: Option<String>,
 }
 
 impl Session {
@@ -15,7 +16,12 @@ impl Session {
             bootstrap,
             used: false,
             result: None,
+            origin: None,
         }
+    }
+
+    pub(super) fn accept_origin(&mut self, origin: &str) -> bool {
+        self.origin.get_or_insert_with(|| origin.to_owned()) == origin
     }
 
     pub(super) fn authenticated(&self, message: &str) -> bool {

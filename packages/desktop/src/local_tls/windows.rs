@@ -31,8 +31,9 @@ use windows_sys::Win32::{
         CreateDirectoryW, CreateFileW, MoveFileExW, CREATE_NEW, DELETE, FILE_ALL_ACCESS,
         FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
-        MOVEFILE_WRITE_THROUGH, OPEN_EXISTING, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        FILE_WRITE_DATA, FILE_WRITE_EA, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        OPEN_ALWAYS, OPEN_EXISTING, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     },
     System::{
         Com::CoTaskMemFree,
@@ -169,6 +170,10 @@ pub(super) fn config_base() -> Result<PathBuf, Error> {
 }
 
 fn open(path: &Path, access: u32) -> Result<File, Error> {
+    open_shared(path, access, 0)
+}
+
+fn open_shared(path: &Path, access: u32, additional_sharing: u32) -> Result<File, Error> {
     let path = wide(path)?;
     // SAFETY: terminated path, no inheritance/template. Opening the reparse point
     // itself lets the handle metadata reject it before reading content or ACLs.
@@ -176,7 +181,7 @@ fn open(path: &Path, access: u32) -> Result<File, Error> {
         CreateFileW(
             path.as_ptr(),
             access | FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | additional_sharing,
             ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
@@ -351,7 +356,7 @@ pub(super) fn staging(parent: &Path) -> Result<tempfile::TempDir, Error> {
 }
 
 pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
-    let file = open(path, GENERIC_READ | READ_CONTROL)?;
+    let file = open_shared(path, GENERIC_READ | READ_CONTROL, FILE_SHARE_DELETE)?;
     check(&file, false, true)?;
     if file.metadata()?.len() > MAX_FILE_BYTES {
         return Err(Error::Invalid);
@@ -366,6 +371,19 @@ pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
 }
 
 pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let mut file = private_file(path, CREATE_NEW, 0)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+pub(super) fn lock(path: &Path) -> Result<File, Error> {
+    let file = private_file(path, OPEN_ALWAYS, FILE_SHARE_READ | FILE_SHARE_WRITE)?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn private_file(path: &Path, disposition: u32, sharing: u32) -> Result<File, Error> {
     let descriptor = User::current()?.descriptor(false)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -373,23 +391,39 @@ pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         bInheritHandle: 0,
     };
     let path = wide(path)?;
-    // SAFETY: CREATE_NEW never replaces an existing file. The owner-only DACL
-    // applies at creation, before any key bytes are written.
+    // SAFETY: the descriptor and terminated path are live. The owner-only DACL
+    // applies at creation. An existing lock file is opened without truncation
+    // and checked on its handle before use.
     let handle = unsafe {
         CreateFileW(
             path.as_ptr(),
             GENERIC_WRITE | READ_CONTROL | FILE_READ_ATTRIBUTES,
-            0,
+            sharing,
             &attributes,
-            CREATE_NEW,
+            disposition,
             FILE_FLAG_OPEN_REPARSE_POINT,
             ptr::null_mut(),
         )
     };
-    let mut file = File::from(owned(handle)?);
+    let file = File::from(owned(handle)?);
     check(&file, false, true)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
+    Ok(file)
+}
+
+pub(super) fn replace(staging: &Path, destination: &Path) -> Result<(), Error> {
+    let (from, to) = (wide(staging)?, wide(destination)?);
+    // SAFETY: terminated paths on the same filesystem. The staged file already
+    // has its final DACL. COPY_ALLOWED is absent to keep this a rename.
+    if unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
     Ok(())
 }
 

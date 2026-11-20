@@ -24,9 +24,9 @@ pub fn load_tls(
 }
 
 /// Checks that a setting is exactly one canonical HTTP(S) browser origin.
-/// Paths, credentials, queries, fragments and opaque origins are rejected.
+/// Wildcards, paths, credentials, queries, fragments and opaque origins are rejected.
 pub fn validate_origin(origin: &str) -> Result<(), TransportError> {
-    if origin.len() > 2048 {
+    if origin.len() > 2048 || origin.contains('*') {
         return Err(TransportError::Origin);
     }
     let parsed = url::Url::parse(origin).map_err(|_| TransportError::Origin)?;
@@ -63,6 +63,8 @@ mod tests {
             "https://example.invalid:443",
             "https://EXAMPLE.invalid",
             "https://example.invalid ",
+            "https://*.example.invalid",
+            "https://*",
         ] {
             assert!(validate_origin(origin).is_err(), "{origin:?}");
         }

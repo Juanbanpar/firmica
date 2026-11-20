@@ -26,6 +26,7 @@ use openssl::{
 };
 use secrecy::{ExposeSecret, SecretBox};
 use std::{
+    collections::BTreeSet,
     fs, io,
     net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
@@ -67,6 +68,21 @@ pub enum Command {
     },
     /// Validate the configured identity and show its trust certificate fingerprint.
     Status,
+    /// Manage the browser origins authorized to connect.
+    Origins {
+        #[command(subcommand)]
+        command: OriginCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OriginCommand {
+    /// Show the authorized origins.
+    List,
+    /// Explicitly authorize an exact HTTP(S) origin.
+    Add { origin: String },
+    /// Revoke authorization for an exact HTTP(S) origin.
+    Remove { origin: String },
 }
 
 #[derive(Debug, Error)]
@@ -82,9 +98,11 @@ pub enum Error {
     #[error("cannot encode the local TLS certificate constraints")]
     Encoding(#[from] der::Error),
     #[error(
-        "expected one exact HTTP(S) browser origin, without credentials, path, query or fragment"
+        "invalid browser origin list: use distinct canonical HTTP(S) origins without wildcards, credentials, paths, queries or fragments"
     )]
     Origin,
+    #[error("browser origin list exceeds the profile size limit")]
+    OriginLimit,
     #[error("local TLS profile already exists; it was not replaced")]
     Exists,
     #[error("local TLS is not configured; use firmica tls init --origin <origin>")]
@@ -94,7 +112,7 @@ pub enum Error {
 }
 
 pub struct Profile {
-    pub origin: String,
+    origins: BTreeSet<String>,
     pub certificate: PathBuf,
     pub key: PathBuf,
     authority: X509,
@@ -106,8 +124,18 @@ pub fn execute(command: Command) -> Result<(), Error> {
     let profile = match command {
         Command::Init { origin } => initialize(&base, &origin)?,
         Command::Status => load(&base)?.ok_or(Error::Missing)?,
+        Command::Origins { command } => {
+            let directory = profile_directory(&base)?.ok_or(Error::Missing)?;
+            let origins = match command {
+                OriginCommand::List => read_origins(&directory)?,
+                OriginCommand::Add { origin } => update_origins(&directory, origin, true)?,
+                OriginCommand::Remove { origin } => update_origins(&directory, origin, false)?,
+            };
+            print_origins(&origins);
+            return Ok(());
+        }
     };
-    println!("Origin: {}", profile.origin);
+    print_origins(&profile.origins);
     println!(
         "Trust certificate: {}",
         profile.certificate.with_file_name("ca.pem").display()
@@ -124,8 +152,21 @@ pub fn execute(command: Command) -> Result<(), Error> {
     Ok(())
 }
 
+fn print_origins(origins: &BTreeSet<String>) {
+    if origins.is_empty() {
+        println!("No authorized browser origins.");
+    }
+    for origin in origins {
+        println!("Origin: {origin}");
+    }
+}
+
 pub fn load_default() -> Result<Option<Profile>, Error> {
     load(&storage::config_base()?)
+}
+
+pub fn load_default_origins() -> Result<BTreeSet<String>, Error> {
+    read_origins(&profile_directory(&storage::config_base()?)?.ok_or(Error::Missing)?)
 }
 
 fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {
@@ -158,25 +199,73 @@ fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {
 }
 
 fn load(base: &Path) -> Result<Option<Profile>, Error> {
+    profile_directory(base)?
+        .as_deref()
+        .map(read_profile)
+        .transpose()
+}
+
+fn profile_directory(base: &Path) -> Result<Option<PathBuf>, Error> {
+    let parent = base.join(PROFILE_PARENT);
+    let directory = parent.join("browser-tls");
     for (path, private) in [
-        (base.to_path_buf(), false),
-        (base.join(PROFILE_PARENT), true),
-        (base.join(PROFILE_PARENT).join("browser-tls"), true),
+        (base, false),
+        (parent.as_path(), true),
+        (directory.as_path(), true),
     ] {
-        match check_directory(&path, private) {
+        match check_directory(path, private) {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             result => result?,
         }
     }
-    read_profile(&base.join(PROFILE_PARENT).join("browser-tls")).map(Some)
+    Ok(Some(directory))
+}
+
+fn read_origins(directory: &Path) -> Result<BTreeSet<String>, Error> {
+    let bytes = read_private(&directory.join("origin"))?;
+    let mut origins = BTreeSet::new();
+    for origin in std::str::from_utf8(bytes.expose_secret())
+        .map_err(|_| Error::Origin)?
+        .split_terminator('\n')
+    {
+        firmica_transport::validate_origin(origin).map_err(|_| Error::Origin)?;
+        if !origins.insert(origin.to_owned()) {
+            return Err(Error::Origin);
+        }
+    }
+    Ok(origins)
+}
+
+fn update_origins(directory: &Path, origin: String, add: bool) -> Result<BTreeSet<String>, Error> {
+    firmica_transport::validate_origin(&origin).map_err(|_| Error::Origin)?;
+    // Lock a separate file so replacing the allowlist does not replace the lock.
+    let _lock = storage::lock(&directory.join("origins.lock"))?;
+    let mut origins = read_origins(directory)?;
+    let changed = if add {
+        origins.insert(origin)
+    } else {
+        origins.remove(&origin)
+    };
+    if changed {
+        let mut contents = String::new();
+        for origin in &origins {
+            contents.push_str(origin);
+            contents.push('\n');
+        }
+        if contents.len() as u64 > MAX_FILE_BYTES {
+            return Err(Error::OriginLimit);
+        }
+        let staging = storage::staging(directory)?;
+        let replacement = staging.path().join("origin");
+        write_private(&replacement, contents.as_bytes())?;
+        storage::replace(&replacement, &directory.join("origin"))?;
+    }
+    Ok(origins)
 }
 
 fn read_profile(directory: &Path) -> Result<Profile, Error> {
     check_directory(directory, true)?;
-    let origin = read_private(&directory.join("origin"))?;
-    let origin = std::str::from_utf8(origin.expose_secret()).map_err(|_| Error::Origin)?;
-    let origin = origin.strip_suffix('\n').unwrap_or(origin).to_owned();
-    firmica_transport::validate_origin(&origin).map_err(|_| Error::Origin)?;
+    let origins = read_origins(directory)?;
     let certificate = directory.join("certificate.pem");
     let key = directory.join("private-key.pem");
     let leaf = one_certificate(read_private(&certificate)?.expose_secret())?;
@@ -186,7 +275,7 @@ fn read_profile(directory: &Path) -> Result<Profile, Error> {
         return Err(Error::Invalid);
     }
     Ok(Profile {
-        origin,
+        origins,
         certificate,
         key,
         authority,
