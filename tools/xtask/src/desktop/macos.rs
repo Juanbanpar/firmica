@@ -194,7 +194,7 @@ pub(super) fn stage(
     stage_app(&build, root, &license, worker, architecture)?;
     if bundle {
         let destination = target.join("dx/firmica/bundle/macos");
-        let app = destination.join("Firmica.app");
+        let app = destination.join("macos/Firmica.app");
         stage_app(&app, root, &license, worker, architecture)?;
         let scratch = tempfile::tempdir_in(&destination)?;
         let archive = scratch.path().join("firmica.zip");
