@@ -34,11 +34,11 @@ For Linux document signing, build the application and its companion key worker t
 ```sh
 cargo xtask build
 ./target/dx/firmica/debug/linux/app/firmica
-# Release application and Debian package:
+# Release application and Debian package (Debian or Ubuntu with dpkg-dev):
 cargo xtask bundle
 ```
 
-The Rust build task invokes Cargo and Dioxus from this checkout. It stages the worker for bundling and places it beside the development executable. The package includes `firmica`, `firmica-key-worker`, and the `afirma` desktop handler. Both executables must remain in a trusted installation directory. Install Linux runtime dependencies separately; the Debian package does not declare them. Linux file dialogs use a desktop portal or the `zenity` fallback.
+The build task stages the worker beside the development executable. Debian packaging uses `dpkg-shlibdeps` from `dpkg-dev` to declare the libraries and minimum versions required by both executables, including WebKitGTK and OpenSSL. Build on the oldest Debian or Ubuntu release you intend to support and use APT to resolve the package dependencies. The `.deb` includes both executables under `/usr/bin`, the `afirma` desktop entry, an icon and the project license notice. File dialogs use a desktop portal with a backend for the current desktop session, or the `zenity` fallback. [Debian shared-library dependencies](https://manpages.debian.org/dpkg-shlibdeps)
 
 On x64 Windows, install the MSVC build tools, WebView2 Runtime, and a patched shared OpenSSL 3 distribution with x64 import libraries. In PowerShell, set its build paths and build from the workspace root:
 
@@ -52,7 +52,9 @@ cargo xtask build
 cargo xtask bundle
 ```
 
-The Windows builder copies `libcrypto-3-x64.dll`, `libssl-3-x64.dll` and the distribution's license from `OPENSSL_DIR` beside the application and worker. The ZIP is written under `target/dx/firmica/bundle/windows/`; extract it to a trusted directory and keep its contents together. WebView2 and the MSVC runtime must be installed separately. Update the bundled OpenSSL DLLs when rebuilding with security fixes. Registration is an explicit per-user step using the included `handler.ps1`; extracting the ZIP does not change associations. Windows dialogs use `rfd`; selected documents must be regular files, and file reparse points are rejected. Local signing is unavailable on mobile.
+The ZIP under `target/dx/firmica/bundle/windows/` includes the x64 application and worker, both OpenSSL 3 DLLs, their license, the project license, generated assets and `handler.ps1`. Extract it to a trusted directory and keep its contents together. Install the Evergreen WebView2 Runtime and the x64 Visual C++ Redistributable separately. Rebuild with patched OpenSSL to update the bundled DLLs. [WebView2 Runtime](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution), [Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)
+
+Registration is an explicit per-user step using `handler.ps1`, which resolves the adjacent executable from the script's location. Windows dialogs use `rfd`, and file inputs must be regular files without reparse points. Local signing is unavailable on mobile.
 
 On macOS 15 or later, install Xcode command-line tools and OpenSSL development libraries, then build natively for Apple Silicon or Intel:
 
@@ -64,7 +66,9 @@ cargo xtask build
 cargo xtask bundle
 ```
 
-The macOS packager statically links OpenSSL, stages the companion worker in `Contents/MacOS`, checks external library dependencies and applies ad-hoc signatures after staging. The architecture-specific ZIP is written under `target/dx/firmica/bundle/macos/`. Extract the whole `.app` into a trusted directory, such as `~/Applications`, and launch it with `open`. The app uses native `rfd` file dialogs. Worker binaries, private TLS entries and new signature files must have no extended ACLs; macOS ACL grants can bypass POSIX mode restrictions. Rebuild to incorporate OpenSSL security updates. These development bundles are not Developer ID signed or notarized; macOS may require explicit approval when opening a downloaded bundle.
+The macOS packager statically links OpenSSL and places the worker in `Contents/MacOS`. It checks both executables' architecture, deployment target and system library dependencies, then applies ad-hoc signatures. It extracts the architecture-specific ZIP under `target/dx/firmica/bundle/macos/` to verify the relocated app, its resources and its signatures. Extract the whole `.app` into a trusted directory, such as `~/Applications`, and launch it with `open`. The app uses native `rfd` file dialogs. Worker binaries, private TLS entries and new signature files must have no extended ACLs because those grants can bypass POSIX mode restrictions. Rebuild to incorporate OpenSSL security updates.
+
+CI produces ad-hoc signed development bundles. Distribution outside the Mac App Store requires a Developer ID Application certificate, Hardened Runtime and a secure timestamp. Sign the worker before signing the enclosing app, then notarize with Apple's `notarytool` and staple the ticket to the app before creating the final ZIP. [Apple Developer ID](https://developer.apple.com/developer-id/), [Apple notarization workflow](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution)
 
 The application declares the `afirma` URL scheme for LaunchServices. Launch the installed application once and select Firmica when the browser asks which application should open `afirma` links. Existing default-handler choices are not changed by Firmica. Cold and warm URL deliveries use the native application event loop. Configure browser TLS using the executable inside the installed bundle:
 
@@ -187,7 +191,7 @@ cargo test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- 
 
 The AutoScript test captures the URI emitted by unmodified AutoScript and hands it to a headless Rust peer. The fixture is checksum-verified and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing copy to use it offline. The Chromium and Firefox wire tests exercise protocol 4.1 outcomes, reconnects and one-time result delivery. Firefox needs `certutil` (NSS tools) for its temporary trust store. Results are saved under `.test-artifacts/protocol41/`.
 
-After building the x86-64 Linux Debian bundle, check its metadata, payload checksums, desktop entry and executables with `ar`, `tar`, `md5sum` and `desktop-file-validate`:
+After building the x86-64 Debian bundle, inspect its dependency metadata, checksums, desktop entry, icon and file permissions with `dpkg-deb`, `md5sum` and `desktop-file-validate`:
 
 ```sh
 FIRMICA_DEB="$PWD/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb" \
@@ -231,13 +235,13 @@ Original code targets GPL-3.0-or-later. Third-party dependencies and reference a
 
 ### CI baseline
 
-CI runs for pull requests and pushes to `main`. Linux runs the shared Rust tests, independent cryptographic verification and headless browser interoperability. The build matrix packages desktop applications and checks worker behavior on Linux, Windows and macOS. Linux also builds the web app and checks the mobile host entry point. To run the optional PKCS#11 integration test, select **Also test the optional PKCS#11 provider with SoftHSM** when dispatching CI manually.
+CI runs for pull requests and pushes to `main`. Linux runs the shared Rust tests, independent cryptographic verification and headless browser interoperability. The build matrix verifies release packages on Ubuntu 24.04, x64 Windows, Apple Silicon and Intel macOS. Worker integration tests run on Linux, Windows and Apple Silicon. Linux also builds the web app and checks the mobile host entry point. To run the optional PKCS#11 integration test, select **Also test the optional PKCS#11 provider with SoftHSM** when dispatching CI manually.
 
 Record the commit SHA, run URLs and attempt numbers when comparing baselines. For a cancelled job, inspect its check annotations and step list. A runner-acquisition error before any steps start has no test logs or artifacts. Retry that job on the same SHA with `gh run rerun RUN_ID --job JOB_ID`. The Linux interoperability job uploads protocol 4.1 evidence as `protocol41-browsers`.
 
 For a ruleset targeting `main`, require a pull request and select GitHub Actions as the expected source of these minimum status checks.
 
 - `audit`, `rust-quality`, `cryptography` and `protocol-interop`
-- `build (ubuntu-latest)`, `build (windows-latest)` and `build (macos-latest)`
+- `build (ubuntu-24.04)`, `build (windows-latest)`, `build (macos-latest)` and `build (macos-15-intel)`
 
 Reserve required checks for jobs that run automatically on every PR. [GitHub required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)

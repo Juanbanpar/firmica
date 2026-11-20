@@ -2,17 +2,17 @@ use crate::run as checked;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use serde::Deserialize;
-#[cfg(any(not(target_os = "macos"), test))]
-use std::io;
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
-#[cfg(any(not(target_os = "macos"), test))]
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(windows, test))]
+mod windows;
 
 #[derive(Args)]
 pub struct Options {
@@ -32,8 +32,12 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     if !cfg!(any(target_os = "linux", target_os = "macos", windows)) {
         bail!("desktop packaging requires a native Linux, macOS or Windows host");
     }
-    let windows = cfg!(windows);
-    let suffix = if windows { ".exe" } else { "" };
+    #[cfg(target_os = "linux")]
+    if bundle {
+        linux::check_tools()?;
+    }
+    let windows_host = cfg!(windows);
+    let suffix = if windows_host { ".exe" } else { "" };
     let release = options.release || (bundle && !options.debug);
     let profile = if release { "release" } else { "debug" };
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -67,7 +71,7 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
         .lines()
         .find_map(|line| line.strip_prefix("host: "))
         .context("rustc did not report its host target")?;
-    if windows && triple != "x86_64-pc-windows-msvc" {
+    if windows_host && triple != "x86_64-pc-windows-msvc" {
         bail!("Windows runtime staging requires an x64 MSVC host");
     }
     let worker = target
@@ -82,7 +86,7 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     )?;
     let mut dx = Command::new("dx");
     dx.current_dir(root.join("packages/desktop")).args([
-        if bundle && !windows {
+        if bundle && !windows_host {
             "bundle"
         } else {
             "build"
@@ -94,7 +98,7 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     if release {
         dx.arg("--release");
     }
-    if bundle && !windows {
+    if bundle && !windows_host {
         dx.args([
             "--package-types",
             if cfg!(target_os = "macos") {
@@ -113,7 +117,7 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let platform = if windows { "windows" } else { "linux" };
+        let platform = if windows_host { "windows" } else { "linux" };
         let application = target
             .join("dx/firmica")
             .join(profile)
@@ -126,101 +130,49 @@ pub fn run(root: &Path, bundle: bool, options: Options) -> Result<()> {
             &worker,
             application.join(format!("firmica-key-worker{suffix}")),
         )?;
-        if windows {
-            fs::copy(root.join("LICENSE"), application.join("LICENSE"))?;
-            fs::copy(
-                root.join("tools/windows/handler.ps1"),
-                application.join("handler.ps1"),
-            )?;
-            let openssl =
-                PathBuf::from(env::var_os("OPENSSL_DIR").context("OPENSSL_DIR is required")?);
-            for name in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
-                let source = [openssl.join("bin").join(name), openssl.join(name)]
-                    .into_iter()
-                    .find(|path| path.is_file())
-                    .with_context(|| {
-                        format!(
-                            "missing x64 OpenSSL runtime {name} under {}",
-                            openssl.display()
-                        )
-                    })?;
-                fs::copy(source, application.join(name))?;
-            }
-            let license = ["license.txt", "LICENSE.txt", "LICENSE"]
-                .into_iter()
-                .map(|name| openssl.join(name))
-                .find(|path| path.is_file())
-                .context("OpenSSL distribution license is missing")?;
-            fs::copy(license, application.join("OpenSSL-LICENSE.txt"))?;
-            if bundle {
-                let destination = target.join("dx/firmica/bundle/windows");
-                fs::create_dir_all(&destination)?;
-                let archive = destination.join(format!("firmica-{triple}.zip"));
-                archive_directory(&application, &archive)?;
-                println!("{}", archive.display());
-            }
+        #[cfg(windows)]
+        windows::stage(root, &target, triple, &application, bundle)?;
+        #[cfg(target_os = "linux")]
+        if bundle {
+            linux::finish(&target)?;
         }
         Ok(())
     }
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
-fn archive_directory(source: &Path, destination: &Path) -> Result<()> {
-    fn append(zip: &mut ZipWriter<fs::File>, root: &Path, directory: &Path) -> Result<()> {
-        let mut entries = fs::read_dir(directory)?.collect::<io::Result<Vec<_>>>()?;
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let name = path
-                .strip_prefix(root)?
-                .to_str()
-                .context("non-UTF-8 bundle path")?
-                .replace('\\', "/");
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                zip.add_directory(format!("{name}/"), SimpleFileOptions::default())?;
-                append(zip, root, &path)?;
-            } else if kind.is_file() {
-                zip.start_file(
-                    name,
-                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
-                )?;
-                io::copy(&mut fs::File::open(path)?, zip)?;
-            } else {
-                bail!("non-regular bundle entry: {}", path.display());
-            }
-        }
-        Ok(())
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn output(command: &mut Command) -> Result<String> {
+    let output = command
+        .output()
+        .with_context(|| format!("cannot run {command:?}"))?;
+    if !output.status.success() {
+        bail!("{command:?}: {}", String::from_utf8_lossy(&output.stderr));
     }
-    let mut zip = ZipWriter::new(fs::File::create(destination)?);
-    append(&mut zip, source, source)?;
-    zip.finish()?;
-    Ok(())
+    Ok(String::from_utf8(output.stdout)?)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Read;
-
-    #[test]
-    fn portable_zip_preserves_nested_assets_and_empty_directories() {
-        let temp = tempfile::tempdir().unwrap();
-        let app = temp.path().join("App space & 'apostrophe'");
-        fs::create_dir_all(app.join("assets/empty")).unwrap();
-        fs::write(app.join("firmica.exe"), b"application fixture").unwrap();
-        fs::write(app.join("assets/style.css"), b"stylesheet fixture").unwrap();
-        let archive = temp.path().join("portable.zip");
-        archive_directory(&app, &archive).unwrap();
-        let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
-        assert_eq!(zip.len(), 4);
-        assert!(zip.by_name("assets/empty/").unwrap().is_dir());
-        let mut content = String::new();
-        zip.by_name("assets/style.css")
-            .unwrap()
-            .read_to_string(&mut content)
-            .unwrap();
-        assert_eq!(content, "stylesheet fixture");
-        assert!(zip.by_name("firmica.exe").is_ok());
+#[cfg(any(target_os = "macos", windows, test))]
+fn stylesheet(assets: &Path) -> Result<PathBuf> {
+    let mut entries = fs::read_dir(assets)
+        .with_context(|| format!("cannot read application assets at {}", assets.display()))?;
+    let entry = entries.next().context("missing desktop stylesheet")??;
+    let filename = entry.file_name();
+    let hash = filename
+        .to_str()
+        .and_then(|name| name.strip_prefix("tailwind-"))
+        .and_then(|name| name.strip_suffix(".css"));
+    let metadata = entry.metadata()?;
+    if entries.next().is_some()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || !hash.is_some_and(|hash| {
+            !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+    {
+        bail!(
+            "expected just the generated Tailwind stylesheet in {}",
+            assets.display()
+        );
     }
+    Ok(entry.path())
 }
