@@ -86,23 +86,35 @@ pub(super) fn SigningForm(
             if let Format::Pades(options) = format() {
                 label { class: "flex items-center gap-3",
                     input { id: "sign-visible", r#type: "checkbox", checked: options.appearance.is_some(), disabled: busy(),
-                        onchange: move |event| format.set(Format::Pades(PdfOptions{appearance:event.checked().then(||Appearance{page:1,rectangle:[40.,30.,400.,70.],text:"Signed with Firmica".into()})})) }
+                        onchange: move |event| format.set(Format::Pades(PdfOptions{appearance:event.checked().then(||Appearance{page:1,rectangle:[40.,30.,400.,70.],text:tr(spanish, "Firmado con Firmica", "Signed with Firmica").into()})})) }
                     {tr(spanish, "Firma visible", "Visible signature")}
                 }
                 if let Some(appearance) = options.appearance.clone() {
+                    fieldset { class: "space-y-3 rounded border p-4", disabled: busy(),
+                    legend { class: "px-2", {tr(spanish, "Posición de la firma", "Signature placement")} }
                     label { class: "block", {tr(spanish, "Texto (ASCII)", "Text (ASCII)")}
-                        input { class: FIELD, value: appearance.text, maxlength: "120", disabled: busy(),
+                        input { id: "sign-visible-text", class: FIELD, value: appearance.text, maxlength: "120",
                             oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.text=event.value();}} } }
                     }
-                    label { class: "block", {tr(spanish, "Página", "Page")}
-                        input { class: FIELD, r#type: "number", min: "1", value: appearance.page, disabled: busy(),
+                    label { class: "block", {tr(spanish, "Número de página (desde 1)", "Page number (starting at 1)")}
+                        input { id: "sign-visible-page", class: FIELD, r#type: "number", min: "1", value: appearance.page,
                             oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.page=event.value().parse().unwrap_or(0);}} } }
                     }
-                    for (index, label) in ["x1", "y1", "x2", "y2"].into_iter().enumerate() {
-                        label { class: "block", "{label} (pt)"
-                            input { class: FIELD, r#type: "number", step: "any", value: appearance.rectangle[index], disabled: busy(),
-                                oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.rectangle[index]=event.value().parse().unwrap_or(f32::NAN);}} } }
+                    p { class: "text-sm", {tr(spanish, "Indica las dos esquinas del rectángulo en puntos PDF (72 puntos por pulgada).", "Enter both corners of the rectangle in PDF points (72 points per inch).")} }
+                    div { class: "grid gap-3 sm:grid-cols-2",
+                        for (index, label) in [
+                            tr(spanish, "Izquierda (X)", "Left (X)"),
+                            tr(spanish, "Abajo (Y)", "Bottom (Y)"),
+                            tr(spanish, "Derecha (X)", "Right (X)"),
+                            tr(spanish, "Arriba (Y)", "Top (Y)"),
+                        ].into_iter().enumerate() {
+                            label { class: "block", "{label}"
+                                input { class: FIELD, r#type: "number", step: "any",
+                                    value: if appearance.rectangle[index].is_finite() { appearance.rectangle[index].to_string() } else { String::new() },
+                                    oninput: move |event| { if let Format::Pades(options)=&mut *format.write() {if let Some(a)=&mut options.appearance {a.rectangle[index]=event.value().parse().unwrap_or(f32::NAN);}} } }
+                            }
                         }
+                    }
                     }
                 }
             }
@@ -139,23 +151,31 @@ fn FileSelection(
     certificate: bool,
     spanish: bool,
 ) -> Element {
+    let name = selected
+        .read()
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned());
     // Linux's WebView picker retains its portal/zenity fallback. Other desktops use
     // the same rfd dependency as saving, with a native parented item dialog.
     #[cfg(target_os = "linux")]
     {
-        let _ = spanish;
-        rsx! { input { id, class: FIELD, r#type: "file",
+        rsx! { input { id, class: "peer sr-only", r#type: "file",
             accept: if certificate { ".p12,.pfx" } else { "" }, disabled: busy(),
-            onchange: move |event| selected.set(event.files().into_iter().next().map(|file| file.path())),
+            onchange: move |event| {
+                if let Some(file) = event.files().into_iter().next() {
+                    selected.set(Some(file.path()));
+                }
+            },
+        }
+        span { id: "{id}-selected",
+            class: "mt-2 block w-full cursor-pointer break-all rounded border px-3 py-2 peer-disabled:cursor-default peer-disabled:opacity-50 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4",
+            if let Some(name) = name { "{name}" }
+            else { {tr(spanish, "Seleccionar archivo…", "Choose file…")} }
         } }
     }
     #[cfg(any(windows, target_os = "macos"))]
     {
-        let name = selected
-            .read()
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned());
         rsx! {
             button { id, class: FIELD, r#type: "button", disabled: busy(),
                 onclick: move |_| {

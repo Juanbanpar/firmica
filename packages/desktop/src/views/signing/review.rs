@@ -100,7 +100,7 @@ pub(super) fn Review(
                 }
                 {tr(spanish, "Autorizo la firma de este documento con este certificado y acepto las comprobaciones pendientes indicadas.", "I authorize signing this document with this certificate and accept the unchecked items shown above.")}
             }
-            div { class: "flex gap-3",
+            div { class: "flex flex-wrap gap-3",
                 button { id: "sign-save", class: BUTTON, disabled: busy || !acknowledged(),
                     onclick: move |event| on_sign.call(event), if external { {tr(spanish, "Firmar y enviar al navegador", "Sign and send to browser")} }
                     else { {tr(spanish, "Firmar y guardar…", "Sign and save…")} }
@@ -122,7 +122,7 @@ fn date(time: std::time::SystemTime) -> String {
         .expect("assessed X.509 time")
         .to_string()
 }
-fn algorithm_name(algorithm: SignatureAlgorithm) -> &'static str {
+pub(super) fn algorithm_name(algorithm: SignatureAlgorithm) -> &'static str {
     match algorithm {
         SignatureAlgorithm::RsaPkcs1v15Sha256 => "RSA PKCS#1 v1.5 / SHA-256",
         SignatureAlgorithm::EcdsaP256Sha256 => "ECDSA P-256 / SHA-256",

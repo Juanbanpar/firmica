@@ -22,6 +22,9 @@ enum Route {
     LocalSigning {},
     #[route("/diagnostics")]
     Diagnostics {},
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[route("/browser")]
+    BrowserSetup {},
 }
 
 const MAIN_CSS: Asset = asset!("/assets/tailwind.css");
@@ -47,6 +50,10 @@ fn App() -> Element {
 /// which allows us to use the desktop-specific `Route` enum.
 #[component]
 fn DesktopNavbar() -> Element {
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    let browser_setup = rsx! { Link { to: Route::BrowserSetup {}, "Browser setup" } };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    let browser_setup = VNode::empty();
     rsx! {
         Navbar {
             Link {
@@ -61,6 +68,7 @@ fn DesktopNavbar() -> Element {
                 to: Route::Diagnostics {},
                 "Diagnostics"
             }
+            {browser_setup}
         }
 
         Outlet::<Route> {}
@@ -70,4 +78,10 @@ fn DesktopNavbar() -> Element {
 #[component]
 fn LocalSigning() -> Element {
     rsx! { views::LocalSigning {} }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[component]
+fn BrowserSetup() -> Element {
+    rsx! { views::BrowserSetup {} }
 }

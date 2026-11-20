@@ -270,6 +270,7 @@ async fn exact_origin_authorization_binds_a_session_and_its_result() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(pending.browser_origin, OTHER);
     pending.reply.send(Decision::Reject).unwrap();
     owner.close(None).await.unwrap();
     let poll = format!("getresult?idsession={SESSION}");

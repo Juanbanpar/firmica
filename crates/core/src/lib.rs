@@ -124,6 +124,9 @@ pub enum ReviewOutcome {
 /// An external review and an optional response path. No origin is authenticated by a URI.
 pub struct IncomingReview {
     pub request: ProtocolRequest,
+    /// Supplied by the trusted transport adapter after checking the browser
+    /// origin and session. A direct invocation has no browser origin.
+    pub browser_origin: Option<String>,
     /// The receiver owns this request's lifetime. Closing it invalidates the review;
     /// `None` leaves the lifetime under local UI control.
     pub reply: Option<async_channel::Sender<ReviewOutcome>>,

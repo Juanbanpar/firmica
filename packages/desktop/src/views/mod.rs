@@ -1,6 +1,10 @@
 mod home;
 pub use home::Home;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+mod browser_setup;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub use browser_setup::BrowserSetup;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod signing;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub use signing::LocalSigning;

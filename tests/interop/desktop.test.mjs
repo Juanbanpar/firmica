@@ -61,6 +61,7 @@ test(`Linux ${deb ? 'Debian payload' : 'OS invocation'}: cold launch, running-in
     session = await inspector(port);
     await until(async () => await session.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
     assert.equal(await session.evaluate('document.querySelector("#request-version")?.textContent'),'4');
+    assert.equal(await session.evaluate('document.querySelector("#request-origin")'),null);
     assert.equal(await session.evaluate('getComputedStyle(document.querySelector("h1")).fontSize'),'30px','Tailwind assets must be loaded');
     const [display,authority] = (await readFile(path.join(dir,'display'),'utf8')).split('\n');
     const xenv = {...env, DISPLAY:display, XAUTHORITY:authority};

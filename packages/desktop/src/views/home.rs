@@ -20,6 +20,7 @@ pub struct BrowserOperation {
     generation: u64,
     pub request: firmica_protocol::signing::SignRequest,
     pub version: firmica_protocol::ProtocolVersion,
+    pub browser_origin: String,
     pub reply: async_channel::Sender<firmica_core::ReviewOutcome>,
 }
 
@@ -48,7 +49,9 @@ pub fn Home() -> Element {
                     }
                     continue;
                 }
-                if let Some(reply) = incoming.reply.as_ref() {
+                if let (Some(reply), Some(browser_origin)) =
+                    (incoming.reply.as_ref(), incoming.browser_origin.as_ref())
+                {
                     if reply.is_closed() {
                         continue;
                     }
@@ -60,6 +63,7 @@ pub fn Home() -> Element {
                                 generation,
                                 request,
                                 version: incoming.request.version,
+                                browser_origin: browser_origin.clone(),
                                 reply: reply.clone(),
                             }));
                             continue;

@@ -18,10 +18,10 @@ mod form;
 mod messages;
 mod review;
 
-use browser::{browser_reply, finish_browser, BrowserConsent};
+use browser::{browser_reply, finish_browser, BrowserConsent, RequestSummary};
 use form::{file_dialog, Inputs, SigningForm};
 use messages::{tr, Status};
-use review::{Details, Review};
+use review::{algorithm_name, Details, Review};
 
 const BUTTON: &str = "rounded border px-4 py-3 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4";
 const FIELD: &str = "mt-2 block w-full rounded border bg-transparent px-3 py-2";
@@ -74,8 +74,19 @@ pub fn LocalSigning(
     });
     let spanish = es();
     let external = browser.is_some();
-    let browser_version =
-        browser.and_then(|browser| browser.read().as_ref().map(|operation| operation.version));
+    let browser_request = browser.and_then(|browser| {
+        browser.read().as_ref().map(|operation| {
+            (
+                operation.version,
+                operation.browser_origin.clone(),
+                RequestSummary {
+                    size: operation.request.document().len(),
+                    algorithm: algorithm_name(operation.request.algorithm()),
+                    format: operation.request.format().label(),
+                },
+            )
+        })
+    });
     let reject_cancellation = cancelled.clone();
 
     let details = prepared
@@ -84,7 +95,15 @@ pub fn LocalSigning(
         .map(|pending| Details::from_review(pending.review()));
     let text = status.read().text(external, spanish);
     let failed = matches!(&*status.read(), Status::Failed(_));
+    let can_stop = matches!(&*status.read(), Status::Opening | Status::Signing);
     let signing_cancellation = cancelled.clone();
+    let stop_cancellation = cancelled.clone();
+    let stop = move |_: MouseEvent| {
+        if matches!(&*status.peek(), Status::Opening | Status::Signing) {
+            stop_cancellation.store(true, Ordering::Release);
+            status.set(Status::Cancelling);
+        }
+    };
 
     let reject = move |_: MouseEvent| {
         if busy() {
@@ -94,6 +113,7 @@ pub fn LocalSigning(
         let reply = browser_reply(browser);
         let pending = prepared.write().take();
         busy.set(true);
+        status.set(Status::Cancelling);
         spawn(async move {
             let result = if let Some(pending) = pending {
                 tokio::task::spawn_blocking(move || pending.cancel())
@@ -125,18 +145,24 @@ pub fn LocalSigning(
                         cancellation.store(true, Ordering::Release);
                     }
                     status.set(Status::Signing);
-                    let result = tokio::task::spawn_blocking(move || {
-                        pending.sign_for_browser(&cancellation)
-                    })
-                    .await
-                    .unwrap_or(Err(Error::Task));
+                    let signing = cancellation.clone();
+                    let result =
+                        tokio::task::spawn_blocking(move || pending.sign_for_browser(&signing))
+                            .await
+                            .unwrap_or(Err(Error::Task));
                     match result {
+                        Ok(_) if cancellation.load(Ordering::Acquire) => {
+                            finish_browser(browser, completion, reply, ReviewOutcome::Rejected);
+                        }
                         Ok(result) => finish_browser(
                             browser,
                             completion,
                             reply,
                             ReviewOutcome::Signed(result),
                         ),
+                        Err(Error::Cancelled) => {
+                            finish_browser(browser, completion, reply, ReviewOutcome::Rejected);
+                        }
                         Err(error) => {
                             status.set(Status::Failed(error));
                             finish_browser(browser, completion, reply, ReviewOutcome::Failed);
@@ -146,19 +172,21 @@ pub fn LocalSigning(
                 busy.set(false);
                 return;
             }
-            let (filename, extension) = prepared
-                .peek()
-                .as_ref()
-                .map(|pending| {
-                    let review = pending.review();
-                    let extension = review.format().extension();
-                    (
-                        format!("{}.signed.{extension}", review.document_name()),
-                        extension,
-                    )
-                })
-                .unwrap_or_else(|| ("signature.csig".into(), "csig"));
+            let destination_defaults = prepared.peek().as_ref().map(|pending| {
+                let review = pending.review();
+                let extension = review.format().extension();
+                (
+                    format!("{}.signed.{extension}", review.document_name()),
+                    extension,
+                )
+            });
+            let Some((filename, extension)) = destination_defaults else {
+                busy.set(false);
+                return;
+            };
+            status.set(Status::ChoosingDestination);
             let destination = file_dialog()
+                .set_title(tr(spanish, "Guardar firma", "Save signature"))
                 .set_file_name(filename)
                 .add_filter("Signature", &[extension])
                 .save_file()
@@ -174,11 +202,18 @@ pub fn LocalSigning(
                     .await
                     .unwrap_or(Err(Error::Task));
                     status.set(match result {
-                        Ok(()) => Status::Saved,
+                        Ok(()) => {
+                            document.set(None);
+                            certificate.set(None);
+                            Status::Saved
+                        }
+                        Err(Error::Cancelled) => Status::Cancelled,
                         Err(error) => Status::Failed(error),
                     });
                     acknowledged.set(false);
                 }
+            } else {
+                status.set(Status::Ready);
             }
             busy.set(false);
         });
@@ -191,6 +226,7 @@ pub fn LocalSigning(
         let pending = prepared.write().take();
         if let Some(pending) = pending {
             busy.set(true);
+            status.set(Status::Cancelling);
             let reply = browser_reply(browser);
             spawn(async move {
                 let result = tokio::task::spawn_blocking(move || pending.cancel())
@@ -209,6 +245,7 @@ pub fn LocalSigning(
         }
     };
 
+    let open_cancellation = cancelled;
     let prepare = move |_: MouseEvent| {
         if busy() {
             return;
@@ -237,6 +274,9 @@ pub fn LocalSigning(
         *password_generation.write() += 1;
         let algorithm = algorithm();
         let format = format();
+        open_cancellation.store(false, Ordering::Release);
+        let cancellation = open_cancellation.clone();
+        let reply = browser_reply(browser);
         busy.set(true);
         status.set(Status::Opening);
         spawn(async move {
@@ -265,14 +305,32 @@ pub fn LocalSigning(
             })
             .await
             .unwrap_or(Err(Error::Task));
+            let result = match result {
+                Ok(pending) if cancellation.load(Ordering::Acquire) => {
+                    let cleanup = tokio::task::spawn_blocking(move || pending.cancel())
+                        .await
+                        .unwrap_or(Err(Error::Task));
+                    Err(cleanup.err().unwrap_or(Error::Cancelled))
+                }
+                result => result,
+            };
             match result {
                 Ok(pending) => {
-                    document.set(None);
-                    certificate.set(None);
                     prepared.set(Some(pending));
                     status.set(Status::Ready);
                 }
-                Err(error) => status.set(Status::Failed(error)),
+                Err(Error::Cancelled) => {
+                    status.set(Status::Cancelled);
+                    if external {
+                        finish_browser(browser, completion, reply, ReviewOutcome::Rejected);
+                    }
+                }
+                Err(error) => {
+                    status.set(Status::Failed(error));
+                    if external && cancellation.load(Ordering::Acquire) {
+                        finish_browser(browser, completion, reply, ReviewOutcome::Failed);
+                    }
+                }
             }
             busy.set(false);
         });
@@ -284,12 +342,19 @@ pub fn LocalSigning(
                 h1 { class: "text-3xl font-semibold tracking-tight", {tr(spanish, "Firmar un documento", "Sign a document")} }
                 button { id: "sign-language", class: BUTTON, onclick: move |_| es.toggle(), if spanish { "English" } else { "Español" } }
             }
-            if external {
-                BrowserConsent { spanish, busy: busy(), version: browser_version.unwrap_or_default(), on_reject: reject }
-            } else {
+            if let Some((version, origin, summary)) = browser_request {
+                BrowserConsent { spanish, busy: busy(), version, origin, summary: details.is_none().then_some(summary), on_reject: reject }
+            } else if !external {
                 p { class: "mb-6", {tr(spanish, "Firma local. Revisa el documento y el certificado antes de autorizar la operación.", "Local signing. Review the document and certificate before authorizing the operation.")} }
             }
-            p { id: "sign-status", class: "mb-6", role: if failed { "alert" } else { "status" }, "{text}" }
+            div { class: "mb-6 flex flex-wrap items-center gap-3",
+                p { id: "sign-status", role: if failed { "alert" } else { "status" }, "{text}" }
+                if can_stop {
+                    button { id: "sign-stop", class: BUTTON, onclick: stop,
+                        {tr(spanish, "Detener operación", "Stop operation")}
+                    }
+                }
+            }
             if let Some(details) = details {
                 Review { details, spanish, external, busy: busy(), acknowledged, on_sign: sign, on_cancel: cancel }
             } else {

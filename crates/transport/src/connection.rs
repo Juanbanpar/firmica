@@ -132,7 +132,11 @@ pub(super) async fn handle(
                     request.version = version;
                     let (reply, result) = oneshot::channel();
                     if requests
-                        .try_send(PendingRequest { request, reply })
+                        .try_send(PendingRequest {
+                            request,
+                            browser_origin: origin.clone(),
+                            reply,
+                        })
                         .is_err()
                     {
                         ProtocolError::Unsupported.wire(version)
