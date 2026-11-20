@@ -53,6 +53,16 @@ mod process;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod wire;
 
+/// In-memory IPC decoding for the repository fuzz targets.
+#[cfg(all(
+    feature = "fuzzing",
+    any(target_os = "linux", target_os = "macos", windows)
+))]
+#[doc(hidden)]
+pub mod fuzzing {
+    pub use super::wire::accepts_frame;
+}
+
 /// Maximum UTF-8 password length accepted before launching a worker.
 pub const MAX_PASSWORD_BYTES: usize = 4096;
 /// Maximum message length sent through [`SigningKey::sign`] (1 MiB).

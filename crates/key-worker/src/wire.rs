@@ -246,7 +246,7 @@ fn decode_import_error(code: u8) -> Result<CertificateError, WorkerError> {
     }
 }
 
-fn read_frame(input: &mut impl Read) -> Result<Option<Frame>, WorkerError> {
+fn read_frame(input: &mut impl Read, maximum: usize) -> Result<Option<Frame>, WorkerError> {
     let mut length = [0; 4];
     loop {
         match input.read(&mut length[..1]) {
@@ -260,7 +260,7 @@ fn read_frame(input: &mut impl Read) -> Result<Option<Frame>, WorkerError> {
         .read_exact(&mut length[1..])
         .map_err(|_| WorkerError::Protocol)?;
     let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_REQUEST_BYTES {
+    if length == 0 || length > maximum {
         return Err(WorkerError::Protocol);
     }
     let mut bytes = frame(vec![0; length]);
@@ -279,9 +279,8 @@ fn write_frame(output: &mut impl Write, bytes: &[u8]) -> Result<(), WorkerError>
         .map_err(|_| WorkerError::Unavailable)
 }
 
-fn import_key(input: &mut impl Read) -> Result<Pkcs12Key, WorkerError> {
-    let bytes = read_frame(input)?.ok_or(WorkerError::Protocol)?;
-    let mut decoder = Decoder(bytes.expose_secret());
+fn decode_import_request(bytes: &[u8]) -> Result<(&[u8], &str), WorkerError> {
+    let mut decoder = Decoder(bytes);
     if decoder.byte()? != IMPORT {
         return Err(WorkerError::Protocol);
     }
@@ -289,6 +288,28 @@ fn import_key(input: &mut impl Read) -> Result<Pkcs12Key, WorkerError> {
     let password = decoder.blob(MAX_PASSWORD_BYTES)?;
     decoder.end()?;
     let password = std::str::from_utf8(password).map_err(|_| WorkerError::Protocol)?;
+    Ok((container, password))
+}
+
+fn decode_sign_input<'a>(
+    decoder: &mut Decoder<'a>,
+) -> Result<(SignatureAlgorithm, SigningInput<'a>), WorkerError> {
+    let algorithm = decode_algorithm(decoder.byte()?)?;
+    let kind = decode_input(decoder.byte()?)?;
+    let message = decoder.blob(MAX_SIGNING_INPUT_BYTES)?;
+    decoder.end()?;
+    let input = match kind {
+        InputKind::Message => SigningInput::Message(message),
+        InputKind::Sha256Digest => {
+            SigningInput::Sha256Digest(message.try_into().map_err(|_| WorkerError::Protocol)?)
+        }
+    };
+    Ok((algorithm, input))
+}
+
+fn import_key(input: &mut impl Read) -> Result<Pkcs12Key, WorkerError> {
+    let bytes = read_frame(input, MAX_REQUEST_BYTES)?.ok_or(WorkerError::Protocol)?;
+    let (container, password) = decode_import_request(bytes.expose_secret())?;
     let password = SecretString::from(password.to_owned());
     Ok(Pkcs12Key::from_der(container, &password)?)
 }
@@ -332,7 +353,7 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
         Err(error) => return Err(error),
     };
     write_frame(&mut output, identity_response(&key)?.expose_secret())?;
-    while let Some(bytes) = read_frame(&mut input)? {
+    while let Some(bytes) = read_frame(&mut input, MAX_REQUEST_BYTES)? {
         let mut decoder = Decoder(bytes.expose_secret());
         match decoder.byte()? {
             CLOSE => {
@@ -342,16 +363,7 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
                 return Ok(());
             }
             SIGN => {
-                let algorithm = decode_algorithm(decoder.byte()?)?;
-                let kind = decode_input(decoder.byte()?)?;
-                let message = decoder.blob(MAX_SIGNING_INPUT_BYTES)?;
-                decoder.end()?;
-                let input = match kind {
-                    InputKind::Message => SigningInput::Message(message),
-                    InputKind::Sha256Digest => SigningInput::Sha256Digest(
-                        message.try_into().map_err(|_| WorkerError::Protocol)?,
-                    ),
-                };
+                let (algorithm, input) = decode_sign_input(&mut decoder)?;
                 match key.sign(algorithm, input) {
                     Ok(signature) => {
                         if signature.value.is_empty() || signature.value.len() > MAX_SIGNATURE_BYTES
@@ -375,6 +387,41 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
     Ok(())
 }
 
+/// Checks exactly one framed IPC record using the worker decoders without opening keys or
+/// spawning a worker.
+///
+/// Frames larger than 64 KiB are rejected so fuzz inputs stay bounded; production uses the
+/// larger request limit in `read_frame`.
+#[cfg(feature = "fuzzing")]
+pub fn accepts_frame(mut input: &[u8]) -> bool {
+    const MAX_FUZZ_FRAME_BYTES: usize = 64 * 1024;
+    if input.len() > MAX_FUZZ_FRAME_BYTES {
+        return false;
+    }
+    let Ok(Some(frame)) = read_frame(&mut input, MAX_FUZZ_FRAME_BYTES) else {
+        return false;
+    };
+    if !input.is_empty() {
+        return false;
+    }
+    let payload = frame.expose_secret();
+    let mut decoder = Decoder(payload);
+    match decoder.byte() {
+        Ok(IMPORT) => decode_import_request(payload).is_ok(),
+        Ok(SIGN) => decode_sign_input(&mut decoder).is_ok(),
+        Ok(CLOSE | CLOSED | SIGNING_ERROR) => decoder.end().is_ok(),
+        Ok(IDENTITY | IMPORT_ERROR) => matches!(
+            decode_identity(payload),
+            Ok(_) | Err(WorkerError::Import(_))
+        ),
+        Ok(SIGNATURE) => decoder
+            .byte()
+            .and_then(decode_algorithm)
+            .is_ok_and(|algorithm| decode_signature(payload, algorithm).is_ok()),
+        _ => payload == HELLO,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,7 +433,7 @@ mod tests {
             &[0, 0, 0, 2, 1][..],
             &[0, 0][..],
         ] {
-            assert!(read_frame(&mut input).is_err());
+            assert!(read_frame(&mut input, MAX_REQUEST_BYTES).is_err());
         }
         for input in [
             &[IDENTITY, 0][..],
