@@ -16,10 +16,3 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 
 [dev-dependencies]
 tempfile = "3"
-roxmltree = "0.20"
-openssl.workspace = true
-base64 = "0.22"
-
-[target.'cfg(windows)'.dev-dependencies]
-windows-registry = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Wdk_Foundation", "Win32_System_StationsAndDesktops", "Win32_NetworkManagement_NetManagement"] }

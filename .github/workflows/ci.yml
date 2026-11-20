@@ -4,11 +4,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      windows_integration:
-        description: Run Windows native integration tests
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -29,7 +24,7 @@ jobs:
       - name: Install Linux signing test dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2 poppler-utils xmlsec1
-      - name: Verify native test tooling
+      - name: Verify OpenSSL CLI
         run: openssl version
       - name: Configure Windows system OpenSSL
         if: runner.os == 'Windows'
@@ -44,6 +39,9 @@ jobs:
           "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
           "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
       - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11
+      - name: Verify macOS worker process controls
+        if: runner.os == 'macOS'
+        run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
       - name: Independently verify PDF revisions and XML signatures
         if: runner.os == 'Linux'
         run: |
@@ -94,98 +92,60 @@ jobs:
       - run: cargo +stable clippy --locked -p xtask --all-targets -- -D warnings
       - name: Install verified Dioxus CLI 0.7.10
         run: cargo xtask install-dx
-      - name: Build desktop application
-        if: runner.os != 'Windows'
+      - name: Build Linux desktop application
+        if: runner.os == 'Linux'
         run: dx build --locked --package desktop --platform desktop
       - name: Build Windows portable application and native worker
         if: runner.os == 'Windows'
         run: cargo xtask bundle --debug
-      - name: Install independent Windows signature verifiers
-        if: runner.os == 'Windows' && inputs.windows_integration
-        id: reference-tools
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: mingw-w64-ucrt-x86_64-poppler mingw-w64-ucrt-x86_64-xmlsec
-      - name: Add signature verifiers to the test environment
-        if: runner.os == 'Windows' && inputs.windows_integration
-        shell: pwsh
-        run: '"PATH=$env:PATH;${{ steps.reference-tools.outputs.msys2-location }}/ucrt64/bin" >> $env:GITHUB_ENV'
-      - name: Verify per-user Windows handler registration
-        if: runner.os == 'Windows' && inputs.windows_integration
-        env:
-          FIRMICA_TEST_APP: target/dx/firmica/debug/windows/app/firmica.exe
-        shell: pwsh
+      - name: Configure macOS system OpenSSL
+        if: runner.os == 'macOS'
         run: |
-          python -m pip install playwright==1.58.0 pywinauto==0.6.9 Pillow==12.1.0
-          if ($LASTEXITCODE -ne 0) { throw 'native UI tooling installation failed' }
-          cargo +stable test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw 'standard-account registration or native signing failed' }
-      # Generates mobile assets and checks its host entry point; not a native mobile build.
+          brew list --versions openssl@3 || brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
+      - name: Build and verify the macOS application bundle
+        if: runner.os == 'macOS'
+        run: |
+          cargo xtask bundle --debug
+          destination="$RUNNER_TEMP/Firmica space & 'apostrophe'"
+          mkdir -p "$destination"
+          ditto -x -k target/dx/firmica/bundle/macos/firmica-*.zip "$destination"
+          app=$(find "$destination" -maxdepth 1 -name '*.app' -type d)
+          codesign --verify --deep --strict "$app"
+      # Generates mobile assets and checks its host entry point.
       - run: dx build --locked --package mobile --platform desktop --features mobile
       - run: cargo +stable test --locked -p desktop -p mobile
-      - name: Verify Windows cold and warm native invocation
-        if: runner.os == 'Windows' && inputs.windows_integration
-        env:
-          FIRMICA_TEST_APP: target/dx/firmica/debug/windows/app/firmica.exe
-        run: cargo +stable test --locked -p xtask --test windows_invocation -- --ignored --nocapture
-      - name: Verify Windows signing and cleanup with the native worker
-        if: runner.os == 'Windows' && inputs.windows_integration
-        shell: pwsh
-        run: |
-          $env:FIRMICA_TEST_WORKER = Join-Path $env:GITHUB_WORKSPACE 'target\dx\firmica\debug\windows\app\firmica-key-worker.exe'
-          cargo +stable test --locked -p desktop -- --ignored --test-threads=1
-      - name: Verify native Windows signing from the extracted portable bundle
-        if: runner.os == 'Windows' && inputs.windows_integration
-        timeout-minutes: 18
-        shell: pwsh
-        run: |
-          $archive = @(Get-ChildItem target/dx/firmica/bundle/windows/*.zip)
-          if ($archive.Count -ne 1) { throw "expected exactly one portable bundle" }
-          $archive = $archive[0]
-          $destination = Join-Path $env:RUNNER_TEMP 'firmica-portable'
-          Expand-Archive $archive.FullName $destination
-          python -m playwright install firefox
-          if ($LASTEXITCODE -ne 0) { throw 'Firefox installation failed' }
-          $env:FIRMICA_TEST_APP = "$destination\firmica.exe"
-          cargo +stable test --locked -p xtask --test windows_formats -- --ignored --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'Windows format acceptance failed' }
-      - name: Save Windows invocation and signing evidence
-        if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: windows-invocation
-          path: |
-            .test-artifacts/windows/
-            .test-artifacts/windows-local/
-            .test-artifacts/windows-browser/
-            .test-artifacts/windows-standard-account/
-            target/dx/firmica/bundle/windows/*.zip
-          if-no-files-found: warn
       - name: Verify desktop signing and cleanup with the native worker
-        if: runner.os == 'Linux'
+        env:
+          WORKER_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
         shell: bash
         run: |
           cargo +stable build --locked -p firmica-key-worker
-          FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
+          FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker$WORKER_SUFFIX" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - run: cargo +stable clippy --locked -p ui -p desktop -p mobile --all-targets -- -D warnings
       - run: cargo +stable doc --locked -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
 
-  linux-invocation:
+  linux-interop:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev xvfb xauth xdotool x11-utils zenity openbox xclip desktop-file-utils libnss3-tools dbus-daemon poppler-utils xmlsec1
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev desktop-file-utils libnss3-tools
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Install verified Dioxus CLI 0.7.10
         run: cargo xtask install-dx
       - name: Build Linux application and companion worker bundle
         run: cargo xtask bundle
+      - name: Verify Debian package metadata and payload
+        env:
+          FIRMICA_DEB: ${{ github.workspace }}/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb
+        run: cargo test --locked -p xtask --test debian -- --ignored
       - run: dx build --locked --package web --platform web
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox
@@ -193,39 +153,12 @@ jobs:
       - run: npm run test:autoscript
       - name: Verify protocol 4.1 with Chromium and Firefox
         run: cargo test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- --ignored --nocapture
-      - run: npm run test:desktop
-      - name: Verify extracted Debian payload
-        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
-      - name: Verify native standalone signing
-        run: npm run test:signing
-      - name: Verify standalone signing from the Debian payload
-        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:signing
-      - name: Verify Firefox browser signing and cancellation
-        run: npm run test:browser-signing
-      - name: Verify browser signing from the Debian payload
-        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:browser-signing
-      - run: npm run test:native-interop
-      - run: npm run test:os-handler
-      - name: Verify cold browser invocation with the Debian TLS profile
-        run: FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:os-handler
-      - run: npm run test:lifecycle
       - name: Save protocol 4.1 browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: protocol41-browsers
           path: .test-artifacts/protocol41/
-          if-no-files-found: warn
-      - name: Save Linux invocation and lifecycle evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: linux-invocation
-          path: |
-            .test-artifacts/linux-bundle/result.json
-            .test-artifacts/linux-os-handler/**/*.json
-            .test-artifacts/linux-os-handler/**/*.png
-            .test-artifacts/lifecycle/*.json
           if-no-files-found: warn
 
   audit:

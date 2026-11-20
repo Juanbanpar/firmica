@@ -162,64 +162,39 @@ Supported format properties are deliberately limited:
 
 ## Verify
 
-Generate the required assets before Cargo checks. The mobile command here checks its host entry point, not Android/iOS packaging.
+Generate the required assets before Cargo checks. The mobile build checks its host entry point.
 
 ```sh
 dx build --locked --package desktop --platform desktop
 dx build --locked --package mobile --platform desktop --features mobile
 cargo fmt --all --check
-cargo test -p firmica-protocol -p firmica-core -p firmica-transport -p desktop -p mobile
-# Linux desktop signing integration tests:
-cargo build --locked -p firmica-key-worker
-FIRMICA_TEST_WORKER="$PWD/target/debug/firmica-key-worker" cargo test --locked -p desktop -- --ignored --test-threads=1
-cargo clippy -p firmica-protocol -p firmica-core -p firmica-transport -p ui -p desktop -p mobile --all-targets -- -D warnings
-cargo check -p desktop
-cargo check -p mobile  # host check; native Android test described below
-cargo doc -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
-
-npm ci
-npx playwright install chromium firefox
-cargo build -p firmica-transport --example probe
-npm run test:autoscript
-npm run test:desktop
-npm run test:signing
-npm run test:browser-signing
-# After building the Debian bundle above (x86-64):
-FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:desktop
-FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:signing
-FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:browser-signing
-npm run test:native-interop
-npm run test:os-handler
-FIRMICA_DEB=target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb npm run test:os-handler
-npm run test:lifecycle
+cargo test --locked -p firmica-protocol -p firmica-core -p firmica-transport -p xtask -p desktop -p mobile
+cargo clippy --locked -p firmica-protocol -p firmica-core -p firmica-transport -p xtask -p ui -p desktop -p mobile --all-targets -- -D warnings
+cargo doc --locked -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
 ```
 
-The signing window tests additionally need `zenity`, `openbox`, `xprop`, `xclip`, and `dbus-run-session`. They use a disposable XDG profile, session bus, clipboard, and Xvfb display. Browser signing tests use unmodified AutoScript and Firefox’s OS handler, verify CAdES with OpenSSL, PAdES with Poppler and XAdES with XMLSec, and check that worker failure and navigation cancellation return no signature. They include 1 MiB detached and 16 MiB attached documents, reject oversized documents before opening a key, and sign using an automatically loaded TLS profile. Provisioning tests check permissions, symlinks, concurrent setup, mismatched keys, expiry and certificate constraints. Transport tests require the OpenSSL CLI and exercise whole/fragmented messages, session authentication and size limits over ephemeral TLS connections.
+Rust tests cover signing review, certificate validation, worker cleanup and safe output. Transport tests use the OpenSSL CLI to create ephemeral TLS credentials and exercise authentication, deadlines, replay, message size limits and fragmentation.
 
-The lifecycle test uses the 60 s synchronous-review and 120 s listener deadlines and takes about two minutes. Browser tests need OpenSSL and the selected browsers' system libraries. The Linux native smoke test additionally needs Xvfb, `xauth`, `xdotool`, `gio`, and `update-desktop-database`; it uses the release artifact built by `dx`. The extracted Debian payload test also needs `ar`, `tar`, `md5sum`, and `desktop-file-validate`. It uses the packaged desktop entry without rewriting it and leaves the system handler unchanged. The Firefox OS-handler test also needs `certutil` (NSS tools) and `dbus-run-session`. It preapproves `afirma` in a disposable profile. Results and a browser screenshot are saved under `.test-artifacts/linux-os-handler/`; `FIRMICA_SCREENSHOT=/absolute/path.png` adds a native-window screenshot when ImageMagick is installed. AutoScript is fetched at a pinned revision with a SHA-256 check and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing unmodified file to run offline. It is not bundled with Firmica.
-
-Protocol 4.1 wire conformance runs in Chromium and Firefox on Linux with the same browser prerequisites:
+On Linux, run the headless browser protocol checks:
 
 ```sh
+npm ci
+npx playwright install --with-deps chromium firefox
+cargo build --locked -p firmica-transport --example probe
+npm run test:autoscript
 cargo test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- --ignored --nocapture
 ```
 
-Rust provides synthetic application outcomes and checks structured errors, version inheritance, polling, reconnects, replay rejection and one-time result delivery. Results are saved under `.test-artifacts/protocol41/`. This fixture advertises 4.1 directly. The native Firefox signing suite exercises both this form and AutoScript's `v=4&jvc=4` form for CAdES, PAdES and all XAdES placements, independently verifies the outputs, and checks cancellation and worker failure.
+The AutoScript test captures the URI emitted by unmodified AutoScript and hands it to a headless Rust peer. The fixture is checksum-verified and cached under `.test-artifacts/`. Set `FIRMICA_AUTOSCRIPT` to an existing copy to use it offline. The Chromium and Firefox wire tests exercise protocol 4.1 outcomes, reconnects and one-time result delivery. Firefox needs `certutil` (NSS tools) for its temporary trust store. Results are saved under `.test-artifacts/protocol41/`.
 
-After building the Windows portable application, install the native Python UI tooling listed below and set `FIRMICA_TEST_APP` to its `firmica.exe` path. On a disposable administrator desktop, `cargo test --locked -p xtask --test windows_handler -- --ignored --nocapture --test-threads=1` creates a temporary standard account and runs registration with its own loaded profile and HKCU hive. It rejects elevated and filtered administrator tokens, verifies denied machine-registry writes, and exercises install, status, uninstall, ownership and quoting, including the packaged application's real TLS setup and registration preflight. The same standard account opens real file dialogs, reviews and signs RSA/P-256 CAdES, PAdES and XAdES documents, and checks cancellation, frozen bytes and worker cleanup. OpenSSL, Poppler and XMLSec independently verify its outputs, including visible PDF appearances and all three XML placements. Access to the test host's interactive desktop and session object namespace is granted only to the disposable logon for the test and restored afterward. The test removes its account and profile and saves evidence under `.test-artifacts/windows-standard-account/`. Registration and signing require no administrator rights.
-
-For native Android invocation checks, build a debug APK with `dx build --locked --package mobile --platform android --target x86_64-linux-android`, then run `FIRMICA_TEST_APK=/path/to/app-debug.apk ANDROID_SERIAL=emulator-5554 cargo test --locked -p xtask --test android -- --ignored --nocapture`. The test refuses physical devices. Set `FIRMICA_TEST_BROWSER=org.mozilla.firefox` to check browser links with Firefox already installed in the emulator.
-
-On Windows, set `$env:FIRMICA_TEST_APP = 'target/dx/firmica/debug/windows/app/firmica.exe'` and run `cargo test --locked -p xtask --test windows_invocation -- --ignored --nocapture` after the desktop build. It requires OpenSSL and a desktop session, opens the real application, checks warm URI delivery and crash recovery, and saves evidence under `.test-artifacts/windows/`. It uses a temporary TLS identity without changing trust stores or URI associations. This checks command-line invocation; installer and browser handler selection need separate testing.
-
-On macOS with Xcode 16.4 and the iOS 18.5 Simulator runtime, run:
+After building the x86-64 Linux Debian bundle, check its metadata, payload checksums, desktop entry and executables with `ar`, `tar`, `md5sum` and `desktop-file-validate`:
 
 ```sh
-dx build --locked --package mobile --platform ios --target aarch64-apple-ios-sim
-FIRMICA_TEST_APP=target/dx/mobile/debug/ios/Mobile.app cargo test --locked -p xtask --test ios -- --ignored --nocapture
+FIRMICA_DEB="$PWD/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb" \
+    cargo test --locked -p xtask --test debian -- --ignored
 ```
 
-The Rust iOS test runs the native Swift XCTest scenario in a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
+Native dialog behavior, operating-system handler registration and delivery, browser-to-desktop signing, and Android and iOS invocation require manual verification.
 
 Dependencies use upstream crates without local patches. Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI explicitly accepts two unsoundness advisories and fails on other vulnerabilities and unsoundness findings.
 
@@ -227,8 +202,6 @@ Dependencies use upstream crates without local patches. Run `cargo audit --deny 
 - Wry's Android HTML parser, `kuchikiki`, pulls in `rand 0.7` through the `selectors` build dependency on `phf_codegen` and `phf_generator`. [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html) has a fix starting at 0.8.6, outside the generator's 0.7 requirement.
 
 The current Dioxus 0.7 dependency requirements prevent a lockfile-only fix for either advisory. Recheck the paths with `cargo tree --locked --workspace --target all -i glib@0.18.5` and the same command with `-i rand@0.7.3` when updating dependencies.
-
-Domain logic, protocol, transport, signing, build tooling and OS invocation checks use Cargo tests. JavaScript is limited to browser/WebView automation with Playwright and the upstream AutoScript fixture. Python is limited to Windows GUI automation with Playwright/pywinauto. Swift XCTest exercises native macOS controls and dialogs, and Safari and native dialogs on iOS. These end-to-end checks complement the Rust tests.
 
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
@@ -250,30 +223,20 @@ The key-worker library keeps unlocked PKCS#12 keys in a separate Linux, macOS or
 
 Native worker tests build their process-control fixture through Cargo and locate it from the reported executable path. They check native limit enforcement, blocked pipe deadlines, abandonment, process loss and RSA/P-256 CAdES output independently verified by OpenSSL. The fixture uses synthetic data and never opens a certificate store. After building the desktop application, set `FIRMICA_TEST_WORKER` to the absolute companion executable path and run `cargo test --locked -p desktop -- --ignored --test-threads=1` for the desktop signing and cleanup tests.
 
-For native Windows format tests, install `playwright==1.58.0`, `pywinauto==0.6.9` and `Pillow==12.1.0`, and Firefox with `python -m playwright install firefox`. Put OpenSSL, Poppler (`pdfsig`, `pdftoppm`) and XMLSec (`xmlsec1`) on `PATH`; MSYS2 provides [Poppler](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-poppler) and [XMLSec](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-xmlsec) packages. Set `$env:FIRMICA_TEST_APP` to an extracted portable bundle's `firmica.exe`, then run `cargo test --locked -p xtask --test windows_formats -- --ignored --nocapture` on a disposable desktop account. Rust generates synthetic identities and documents, runs the native UI/browser drivers, and independently verifies every output. The suite covers RSA/P-256 CAdES, invisible and visible PAdES, and enveloped, enveloping and internally detached XAdES. It checks consent, cancellation, frozen bytes and worker exit before publication. The opt-in CI run uses an extracted debug portable bundle (`cargo xtask bundle --debug`). Screenshots, PDF renders, tool versions and diagnostics are saved under `.test-artifacts/windows-local/` and `.test-artifacts/windows-browser/`. WebView2 inspection is enabled only in the synthetic test process.
-
 `firmica-validation` checks local leaf-certificate restrictions for document signing, including validity, key usage, extended key usage, CA usage and private-key usage periods. It accepts the Microsoft Document Signing EKU used by FNMT citizen profiles and blocks certificates declaring the DNIe authentication policy. It rejects unhandled critical extensions and malformed constraints. Issuer signatures, chain trust, revocation and legal qualification remain outside the assessment. [FNMT citizen profiles](https://www.sede.fnmt.gob.es/documents/10445900/10575386/perfiles_certificados_ac_usuarios.pdf), [DNIe certificate profiles](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.4.pdf)
 
 The core signing review API binds approval to the selected document bytes, certificate identity, algorithm and format choices, then rechecks the certificate before using the key. Provider cleanup must succeed before publishing output. The Linux, macOS and Windows desktop signing screens use this review API.
 
 Original code targets GPL-3.0-or-later. Third-party dependencies and reference assets retain their own licences.
 
-The manually dispatched **Windows bundle QA** workflow can replay standard-account registration/signing, native dialogs and browser tests against a CI run’s `windows-invocation` artifact. It checks that the application and builder sources match the current checkout before testing the extracted ZIP; test fixtures may change.
-
-The Windows format test also exercises Firefox with unmodified pinned AutoScript and direct protocol 4.1 requests for every format and algorithm. It requires an account with no existing `afirma` association or Firmica configuration. It uses the bundled registration script, packaged TLS provisioning, a private Firefox copy/profile trusting the generated CA, and real native consent. A separate fresh Firefox profile must reject that CA. The suite checks cold launch, warm delivery, pending-review protection, cancellation and worker failure, plus protocol 4.1 result replay rejection. One pair of requests waits for an actual listener expiry and reuses the existing application; the remaining cases cold-launch through the registered handler. Cleanup removes only the generated TLS profile and registration. Protected Windows defaults and OS trust are preserved.
-
-For native macOS acceptance tests, install `nss`, `poppler` and `xmlsec1` through Homebrew, then run `npm ci` and `npx playwright install firefox`. On a disposable macOS desktop account, set `FIRMICA_TEST_APP` to the absolute extracted `.app` path and run `cargo test --locked -p xtask --test macos -- --ignored --nocapture --test-threads=1`. Xcode and a graphical session are required. Rust generates synthetic fixtures and verifies signatures; XCTest exercises actual application controls and native dialogs; Playwright drives Firefox with unmodified pinned AutoScript and direct protocol 4.1 requests. Both bootstrap forms exercise RSA/P-256 CAdES, visible PAdES and every XAdES placement, plus cancellation, worker failure, disconnection and pending-review protection. The test refuses another application's `afirma` handler or an existing Firmica configuration, uses temporary profile-scoped browser trust, and removes its configuration and registration. Screenshots, XCTest results and sanitized diagnostics are retained under `.test-artifacts/macos/`. The **macOS desktop** workflow runs these checks against relocated bundles on Apple Silicon and Intel.
-
 ### CI baseline
 
-Record the commit SHA, run URLs and attempt numbers when comparing baselines. Native Windows, macOS and iOS integration checks run on demand. Dispatch **CI** with **Run Windows native integration tests** enabled, or dispatch **macOS desktop** or **iOS invocation** from a branch pointing to the revision under test. For a cancelled job, inspect its check annotations and step list. A runner-acquisition error before any steps start has no test logs or artifacts. Retry that job on the same SHA with `gh run rerun RUN_ID --job JOB_ID`. If a step fails after a runner starts, inspect its logs and the run's test artifacts.
-
-The Linux job retains Debian payload, Firefox OS-handler and lifecycle evidence in `linux-invocation`, and protocol 4.1 results in `protocol41-browsers`. The Firefox OS-handler and native protocol 4.1 tests put results from the extracted Debian package in a `debian/` subdirectory so both runs' evidence is available.
+Record the commit SHA, run URLs and attempt numbers when comparing baselines. For a cancelled job, inspect its check annotations and step list. A runner-acquisition error before any steps start has no test logs or artifacts. Retry that job on the same SHA with `gh run rerun RUN_ID --job JOB_ID`. The Linux interoperability job uploads protocol 4.1 evidence as `protocol41-browsers`.
 
 For a ruleset targeting `main`, require a pull request and select GitHub Actions as the expected source of these minimum status checks.
 
-- `audit` and `linux-invocation`
+- `audit` and `linux-interop`
 - `signing (ubuntu-latest)`, `signing (macos-latest)` and `signing (windows-latest)`
 - `rust (ubuntu-latest)`, `rust (macos-latest)` and `rust (windows-latest)`
 
-Use **Windows bundle QA** to replay tests against an existing portable bundle. Reserve required checks for jobs that run automatically on every PR. [GitHub required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)
+Reserve required checks for jobs that run automatically on every PR. [GitHub required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)

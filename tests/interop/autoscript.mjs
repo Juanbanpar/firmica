@@ -1,4 +1,4 @@
-// Pinned, unmodified AutoScript used by native interoperability tests.
+// Pinned, unmodified AutoScript used by headless interoperability tests.
 import assert from 'node:assert/strict';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
