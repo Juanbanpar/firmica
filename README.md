@@ -200,6 +200,31 @@ FIRMICA_DEB="$PWD/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb" \
 
 Native dialog behavior, operating-system handler registration and delivery, browser-to-desktop signing, and Android and iOS invocation require manual verification.
 
+### Parser regression corpus and fuzzing
+
+Ordinary CI checks synthetic accepted and rejected inputs for invocation URIs, signing properties, WebSocket messages, worker IPC, and PDF and XML preflight.
+
+```sh
+cargo test --locked --manifest-path fuzz/Cargo.toml --lib
+```
+
+On Linux, install a C++ compiler and OpenSSL development headers. Use the pinned nightly and `cargo-fuzz` to run a bounded AddressSanitizer session. List the available target names with `cargo +nightly-2026-11-14 fuzz list`.
+
+```sh
+rustup toolchain install nightly-2026-11-14 --profile minimal
+cargo install cargo-fuzz --locked --version 0.13.2
+cargo +nightly-2026-11-14 fetch --locked --manifest-path fuzz/Cargo.toml
+target=uri_query
+sandbox=$(mktemp -d)
+mkdir -p "$sandbox/corpus" "$sandbox/artifacts"
+CARGO_NET_OFFLINE=true cargo +nightly-2026-11-14 fuzz run --features libfuzzer "$target" \
+  "$sandbox/corpus" "fuzz/corpus/$target" -- \
+  -seed=1 -max_len=65536 -runs=20000 -max_total_time=15 -timeout=5 \
+  -rss_limit_mb=1024 -malloc_limit_mb=128 -artifact_prefix="$sandbox/artifacts/"
+```
+
+The targets parse in memory without opening keys, spawning workers or opening network connections. Keep generated inputs and sanitizer artifacts in the temporary directory. Add a small, synthetic regression to the corpus when it captures a parser behavior worth preserving. To run all six targets in GitHub Actions, select **Also run bounded parser fuzzing** when dispatching CI manually.
+
 Dependencies use upstream crates without local patches. Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI explicitly accepts two unsoundness advisories and fails on other vulnerabilities and unsoundness findings.
 
 - Dioxus Desktop's Linux GTK 3 stack, including GTK and WebKitGTK, requires GLib 0.18. [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) is fixed in GLib 0.20 and later.

@@ -1,5 +1,6 @@
 //! Real TLS/WebSocket boundary tests. All credentials and trust are ephemeral.
 use super::{load_tls, Decision, PendingRequest, Server};
+use firmica_protocol::signing::SignResponse;
 use firmica_protocol::{
     ProtocolRequest, WebSocketBootstrap, MAX_URI_BYTES, MAX_WEBSOCKET_REQUEST_BYTES,
 };
@@ -279,10 +280,49 @@ async fn asynchronous_review_survives_reconnect_until_listener_expires() {
     timeout(Duration::from_secs(5), pending.reply.closed())
         .await
         .unwrap();
+    assert!(pending
+        .reply
+        .send(Decision::Signed(SignResponse::new(b"A", b"B").unwrap()))
+        .is_err());
     timeout(Duration::from_secs(5), &mut peer.task)
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_connections_admit_and_deliver_only_once() {
+    async fn exchange(socket: &mut Client, message: &str) -> String {
+        socket.send(Message::Text(message.into())).await.unwrap();
+        received(socket).await.into_text().unwrap().to_string()
+    }
+
+    let mut peer = Peer::start().await;
+    let mut first = peer.connect().await;
+    let mut second = peer.connect().await;
+    let sign = format!("afirma://sign?idsession={SESSION}&dat=AA==");
+    let (left, right) = tokio::join!(exchange(&mut first, &sign), exchange(&mut second, &sign));
+    let unsupported = super::ProtocolError::Unsupported.wire("4.1".parse().unwrap());
+    let mut replies = [left.as_str(), right.as_str()];
+    replies.sort_unstable();
+    assert_eq!(replies, ["#wait", unsupported.as_str()]);
+
+    let pending = timeout(Duration::from_secs(5), peer.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.request.parameter("dat"), Some("AA=="));
+    assert!(peer.requests.try_recv().is_err());
+    pending
+        .reply
+        .send(Decision::Signed(SignResponse::new(b"A", b"B").unwrap()))
+        .unwrap();
+
+    let poll = format!("getresult?idsession={SESSION}");
+    let (left, right) = tokio::join!(exchange(&mut first, &poll), exchange(&mut second, &poll));
+    let mut replies = [left.as_str(), right.as_str()];
+    replies.sort_unstable();
+    assert_eq!(replies, ["QQ==|Qg==", unsupported.as_str()]);
 }
 
 #[tokio::test]
