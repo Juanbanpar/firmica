@@ -66,8 +66,9 @@ async function lifetime(asynchronous) {
     }
     await connect();
     const submitted = performance.now();
-    await page.evaluate(session => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj&format=CAdES&algorithm=SHA256withRSA`),session);
-    await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
+    const operation = asynchronous ? 'sign' : 'cosign';
+    await page.evaluate(({session,operation}) => window.reviewSocket.send(`afirma://${operation}?idsession=${session}&dat=c3ludGhldGlj&format=CAdES&algorithm=SHA256withRSA`),{session,operation});
+    await until(async () => (await native.evaluate('document.querySelector("#request-operation")?.textContent')) === operation);
     if(asynchronous) {
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'asynchronous review must use the signing form');
       await page.waitForFunction(() => window.replies.includes('#wait'));
@@ -81,7 +82,8 @@ async function lifetime(asynchronous) {
     } else {
       await page.waitForFunction(() => window.replies.includes('CANCEL'),null,{timeout:75000});
     }
-    await until(async () => (await native.evaluate('document.querySelector("#browser-status")?.textContent'))?.includes('caducado'),130000);
+    const expiredStatus = asynchronous ? '#browser-status' : '#review-status';
+    await until(async () => (await native.evaluate(`document.querySelector("${expiredStatus}")?.textContent`))?.includes('caducado'),130000);
     const elapsed = (performance.now() - (asynchronous ? started : submitted)) / 1000;
     const deadline = asynchronous ? 120 : 60;
     assert.ok(elapsed >= deadline - 5 && elapsed <= deadline + 15,
@@ -98,7 +100,7 @@ async function lifetime(asynchronous) {
     await native.evaluate('document.querySelector("#acknowledge-request").click(); true');
     await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes(asynchronous ? 'no está implementada' : 'not implemented'));
     const report = {mode:asynchronous ? 'async listener expiry' : 'synchronous review timeout',
-      protocol:4,jvc:asynchronous ? 4 : 3,request:'sign',certificateBackend:null,
+      protocol:asynchronous ? '4.1' : '4',jvc:asynchronous ? 4 : 3,request:operation,certificateBackend:null,
       platform:process.platform,browser:browser.version(),elapsedSeconds:elapsed,
       applicationSha256:createHash('sha256').update(await readFile(binary)).digest('hex'),
       expected:'expired review clears controls and accepts a new local invocation',actual:'passed',
