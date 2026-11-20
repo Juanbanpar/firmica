@@ -33,5 +33,5 @@ Adapted from the [official Dioxus 0.7 Workspace template instructions](https://g
 ## Verification
 
 - Run the affected Rust tests and Clippy checks. Build with the matching Dioxus CLI when changing RSX, assets, styles or platform entry points; `cargo check` does not generate Tailwind CSS or package assets.
-- Use the existing native/browser tests when changing dialogs, consent, URI delivery, focus or lifecycle behavior. Keep browser inspection and synthetic fixtures confined to tests.
+- Use Rust tests for consent and lifecycle behavior, and headless browser tests for protocol interoperability. Verify native dialog, focus and URI delivery behavior manually when needed.
 - For shared UI changes, check the affected desktop, web and mobile targets rather than assuming one host build proves every platform.

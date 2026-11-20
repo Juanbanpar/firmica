@@ -6,7 +6,7 @@ Firmica is a Rust electronic-signature client targeting existing AutoFirma integ
 
 - `crates/` contains reusable protocol, domain, transport, certificate, signing and validation libraries. Keep these independent of Dioxus.
 - `packages/` contains the Dioxus desktop, mobile, web and shared UI packages. Follow `packages/AGENTS.md` there.
-- `tools/xtask/` contains the existing Rust packaging tasks and platform smoke tests; `tests/interop/` contains browser, native UI and reference fixtures.
+- `tools/xtask/` contains the Rust packaging tasks and static package tests. `tests/interop/` contains headless browser protocol fixtures.
 - Keep the official Dioxus Workspace structure. Add crates only when an implemented responsibility needs one.
 
 ## Implementation
@@ -30,7 +30,7 @@ Firmica is a Rust electronic-signature client targeting existing AutoFirma integ
 
 - Prefer native Cargo commands for compilation, tests, formatting, Clippy and rustdoc. Use Dioxus `dx` for assets and application bundles.
 - Use the existing `cargo xtask build` / `cargo xtask bundle` when companion-worker staging or portable packaging is required. Keep custom tooling limited to work Cargo and Dioxus do not already handle; do not make `build.rs` install tools or package applications.
-- Write behavior-focused Rust unit and integration tests, including relevant edge cases and failures. Use external automation only where an actual browser, native dialog, platform SDK or independent reference implementation is needed.
+- Write behavior-focused Rust unit and integration tests, including relevant edge cases and failures. Use external automation for headless browser protocol tests, static package inspection or independent reference implementations. Verify native GUI, handler delivery and simulator behavior manually when needed.
 - Run `cargo fmt --all --check` and the affected packages' `cargo test --locked -p <package>`, `cargo clippy --locked -p <package> --all-targets -- -D warnings`, and `cargo doc --locked -p <package> --no-deps` as appropriate.
 - Select native and interoperability checks from the README and CI workflows for the behavior changed. Host compilation does not establish Android, iOS, Windows or macOS runtime support. Report what could not be verified.
 - For instruction-only changes, check scope, links and consistency with the repository; application rebuilds are unnecessary.

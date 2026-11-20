@@ -61,10 +61,10 @@ impl Peer {
     }
 
     pub(super) async fn configured(version: &str, origin: &str) -> Self {
-        Self::with_origins(version, &[origin]).await
+        Self::with_origins(version, 4, &[origin]).await
     }
 
-    async fn with_origins(version: &str, origins: &[&str]) -> Self {
+    async fn with_origins(version: &str, jvc: u8, origins: &[&str]) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let certificate = directory.path().join("tls.pem");
         let key = directory.path().join("tls.key");
@@ -144,7 +144,7 @@ impl Peer {
         .with_no_client_auth();
         let bootstrap = WebSocketBootstrap::from_request(
             &ProtocolRequest::parse(&format!(
-                "afirma://websocket?v={version}&jvc=4&ports=49152&idsession={SESSION}"
+                "afirma://websocket?v={version}&jvc={jvc}&ports=49152&idsession={SESSION}"
             ))
             .unwrap(),
         )
@@ -215,11 +215,105 @@ async fn received(socket: &mut Client) -> Message {
         .unwrap()
 }
 
+// Keep real time active during TLS and WebSocket I/O so the clock only jumps
+// when the test explicitly advances it.
+async fn elapse(seconds: u64) {
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(seconds)).await;
+    tokio::time::resume();
+}
+
+#[tokio::test]
+async fn synchronous_review_expires_without_a_decision() {
+    let mut peer = Peer::with_origins("4", 3, &[ORIGIN]).await;
+    let mut socket = peer.connect().await;
+    socket
+        .send(Message::Text(
+            format!("afirma://cosign?idsession={SESSION}").into(),
+        ))
+        .await
+        .unwrap();
+    let pending = timeout(Duration::from_secs(5), peer.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    elapse(59).await;
+    assert!(!pending.reply.is_closed());
+    elapse(2).await;
+    assert_eq!(received(&mut socket).await.to_text().unwrap(), "CANCEL");
+    assert!(pending.reply.send(Decision::Reject).is_err());
+}
+
+#[tokio::test]
+async fn asynchronous_review_survives_reconnect_until_listener_expires() {
+    let mut peer = Peer::start().await;
+    let mut socket = peer.connect().await;
+    let sign = Message::Text(format!("afirma://sign?idsession={SESSION}&dat=AA==").into());
+    socket.send(sign.clone()).await.unwrap();
+    assert_eq!(received(&mut socket).await.to_text().unwrap(), "#wait");
+    let mut pending = timeout(Duration::from_secs(5), peer.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    socket.close(None).await.unwrap();
+    drop(socket);
+
+    elapse(119).await;
+    let mut socket = peer.connect().await;
+    socket
+        .send(Message::Text(
+            format!("getresult?idsession={SESSION}").into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(received(&mut socket).await.to_text().unwrap(), "#wait");
+    socket.send(sign).await.unwrap();
+    assert_eq!(
+        received(&mut socket).await.to_text().unwrap(),
+        "err-00:=AF600002 - Operation not supported"
+    );
+    assert!(peer.requests.try_recv().is_err());
+
+    elapse(2).await;
+    timeout(Duration::from_secs(5), pending.reply.closed())
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), &mut peer.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn listener_certificate_requires_explicit_trust() {
+    let peer = Peer::start().await;
+    let client = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(rustls::RootCertStore::empty())
+    .with_no_client_auth();
+    let stream = TcpStream::connect(peer.address).await.unwrap();
+    let error = TlsConnector::from(Arc::new(client))
+        .connect("127.0.0.1".try_into().unwrap(), stream)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.get_ref().and_then(|error| error.downcast_ref()),
+        Some(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::UnknownIssuer
+        ))
+    ));
+    peer.connect().await;
+}
+
 #[tokio::test]
 async fn exact_origin_authorization_binds_a_session_and_its_result() {
     const OTHER: &str = "https://other.invalid:8443";
     const INVALID_SESSION: &str = "err-00:=AF620010 - Invalid WebSocket session";
-    let mut peer = Peer::with_origins("4", &[ORIGIN, OTHER]).await;
+    let mut peer = Peer::with_origins("4", 4, &[ORIGIN, OTHER]).await;
     for headers in [
         &[][..],
         &["https://example.invalid:443"],
