@@ -89,15 +89,25 @@ fn parses_source_derived_envelopes() {
 }
 #[test]
 fn separates_protocol_and_javascript_versions() {
-    let req = ProtocolRequest::parse(
-        "afirma://websocket?v=4&jvc=4&ports=49152,49153&idsession=0123456789abcdef",
-    )
-    .unwrap();
-    let channel = WebSocketBootstrap::from_request(&req).unwrap();
-    assert_eq!(channel.version.to_string(), "4");
-    assert!(channel.asynchronous);
-    assert_eq!(channel.ports, [49152, 49153]);
-    assert!(!format!("{channel:?}").contains(channel.session()));
+    for (version, script, negotiated, asynchronous) in [
+        ("4", "", "4", false),
+        ("4", "&jvc=3", "4", false),
+        ("4", "&jvc=4", "4.1", true),
+        ("4", "&jvc=5", "4.1", true),
+        ("4.1", "&jvc=3", "4.1", false),
+        ("4.1", "&jvc=4", "4.1", true),
+    ] {
+        let req = ProtocolRequest::parse(&format!(
+            "afirma://websocket?v={version}{script}&ports=49152,49153&idsession=0123456789abcdef"
+        ))
+        .unwrap();
+        let channel = WebSocketBootstrap::from_request(&req).unwrap();
+        assert_eq!(req.version.to_string(), version);
+        assert_eq!(channel.version.to_string(), negotiated);
+        assert_eq!(channel.asynchronous, asynchronous);
+        assert_eq!(channel.ports, [49152, 49153]);
+        assert!(!format!("{channel:?}").contains(channel.session()));
+    }
     for v in ["0", "1", "2", "3", "4", "4.1"] {
         let req = ProtocolRequest::parse(&format!("afirma://sign?ver={v}")).unwrap();
         assert_eq!(req.version.to_string(), v);
@@ -149,7 +159,9 @@ fn rejects_unsafe_bootstraps() {
         "v=4&idsession=0123456789abcdef&ports=80",
         "v=4&idsession=0123456789abcdef&ports=65536",
         "v=4&idsession=0123456789abcde_&ports=49152",
-        "v=4&idsession=0123456789abcdef&ports=49152&jvc=5",
+        "v=4&idsession=0123456789abcdef&ports=49152&jvc=0",
+        "v=4&idsession=0123456789abcdef&ports=49152&jvc=%2B4",
+        "v=4&idsession=0123456789abcdef&ports=49152&jvc=2147483648",
     ] {
         let req = ProtocolRequest::parse(&format!("afirma://websocket?{suffix}")).unwrap();
         assert!(WebSocketBootstrap::from_request(&req).is_err());

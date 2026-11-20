@@ -23,6 +23,9 @@ impl fmt::Debug for WebSocketBootstrap {
 
 impl WebSocketBootstrap {
     /// Requires protocol 4/4.1, an ASCII alphanumeric session and 1–3 unprivileged ports.
+    /// AutoScript compatibility codes above 3 use asynchronous protocol 4.1, even
+    /// when the bootstrap advertises 4. The pinned client uses this form so it can
+    /// still launch AutoFirma releases that predate minor protocol versions.
     pub fn from_request(request: &ProtocolRequest) -> Result<Self, ParseError> {
         if request.operation != Operation::WebSocket || request.version.major != 4 {
             return Err(ParseError::Version);
@@ -42,19 +45,24 @@ impl WebSocketBootstrap {
         if ports.is_empty() || ports.len() > 3 || ports.iter().any(|p| *p < 1024) {
             return Err(ParseError::Ports);
         }
-        let jvc: u16 = request
-            .parameter("jvc")
-            .unwrap_or("1")
-            .parse()
-            .map_err(|_| ParseError::Version)?;
-        if !(1..=4).contains(&jvc) {
+        let jvc = request.parameter("jvc").unwrap_or("1");
+        if !jvc.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(ParseError::Version);
         }
+        let jvc: i32 = jvc.parse().map_err(|_| ParseError::Version)?;
+        if jvc == 0 {
+            return Err(ParseError::Version);
+        }
+        let asynchronous = jvc > 3;
         Ok(Self {
-            version: request.version,
+            version: if asynchronous {
+                ProtocolVersion { major: 4, minor: 1 }
+            } else {
+                request.version
+            },
             ports,
             session: session.to_owned(),
-            asynchronous: jvc > 3,
+            asynchronous,
         })
     }
 

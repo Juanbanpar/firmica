@@ -1,4 +1,4 @@
-// Explicit browser fixture; the pinned AutoScript continues to negotiate protocol 4.
+// Explicit protocol 4.1 bootstrap. Pinned AutoScript advertises 4 with jvc=4.
 async function signProtocol41(scenario) {
   const session = '0123456789abcdef';
   const endpoint = `wss://127.0.0.1:${scenario.port}/`;

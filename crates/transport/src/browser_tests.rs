@@ -1,4 +1,4 @@
-//! Browser wire conformance; AutoScript itself still negotiates protocol 4.
+//! Browser wire conformance with an explicit protocol 4.1 bootstrap.
 use super::{transfer_tests::Peer, Decision};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use firmica_protocol::{Operation, ProtocolVersion};

@@ -25,23 +25,16 @@ impl Session {
     }
 
     pub(super) fn authenticated(&self, message: &str) -> bool {
-        let query = if let Some(value) = message
-            .strip_prefix("echo=-idsession=")
-            .and_then(|v| v.strip_suffix("@EOF"))
-        {
-            return value == self.bootstrap.session();
-        } else if let Some(query) = message.strip_prefix("getresult?") {
-            query
-        } else if let Some((_, query)) = message.split_once('?') {
-            query
-        } else {
+        if let Some(value) = message.strip_prefix("echo=-idsession=") {
+            return value.strip_suffix("@EOF") == Some(self.bootstrap.session());
+        }
+        let Some((operation, query)) = message.split_once('?') else {
             return false;
         };
-        parse_query(query)
-            .ok()
-            .and_then(|p| p.get("idsession").cloned())
-            .as_deref()
-            == Some(self.bootstrap.session())
+        parse_query(query).is_ok_and(|fields| {
+            (operation != "getresult" || fields.len() == 1)
+                && fields.get("idsession").map(String::as_str) == Some(self.bootstrap.session())
+        })
     }
 }
 
@@ -65,10 +58,12 @@ mod tests {
         }
         for text in [
             "echo=garbageidsession=0123456789abcdef@EOF",
+            "echo=-idsession=wrong?idsession=0123456789abcdef",
             "afirma://sign?dat=idsession=0123456789abcdef",
             "afirma://sign?idsession=0123456789abcdef&idsession=attacker",
             "getresult?idsession=0123456789abcdefsuffix",
             "getresult?idsession=wrong",
+            "getresult?idsession=0123456789abcdef&extra=unexpected",
         ] {
             assert!(!state.authenticated(text));
         }

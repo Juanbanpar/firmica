@@ -1,4 +1,4 @@
-// Raw browser WSS conformance: the pinned AutoScript negotiates protocol 4.
+// Raw browser WSS conformance with an explicit protocol 4.1 bootstrap.
 // Rust owns fixtures, application decisions and validation of the observed frames.
 import { readFile, writeFile } from 'node:fs/promises';
 import { chromium, firefox } from 'playwright';

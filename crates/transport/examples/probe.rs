@@ -1,5 +1,8 @@
 //! Headless conformance peer. Delayed cancellation exercises AutoScript result polling.
-use firmica_protocol::{ProtocolRequest, WebSocketBootstrap};
+use firmica_protocol::{
+    signing::{RequestError, SignRequest},
+    ProtocolRequest, WebSocketBootstrap,
+};
 use firmica_transport::{load_tls, Decision, Server};
 use std::{path::Path, time::Duration};
 
@@ -16,10 +19,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<firmica_transport::PendingRequest>(1);
     tokio::spawn(async move {
         while let Some(pending) = receiver.recv().await {
-            assert_eq!(pending.request.operation, firmica_protocol::Operation::Sign);
+            let decision = match SignRequest::decode(&pending.request) {
+                Ok(_) => Decision::Reject,
+                Err(RequestError::Unsupported) => Decision::Unsupported,
+                Err(RequestError::Invalid) => Decision::InvalidParameters,
+            };
             // Hold the operation long enough to require at least one getresult query.
             tokio::time::sleep(Duration::from_millis(2500)).await;
-            let _ = pending.reply.send(Decision::Reject);
+            let _ = pending.reply.send(decision);
         }
     });
     println!("READY");

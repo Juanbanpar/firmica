@@ -245,7 +245,7 @@ for (const scenario of CASES) document.getElementById(scenario.name).onclick = (
                     observed, pid, automation, native_browser, native_page = connect_application()
                     evidence["checks"].append(f"{scenario}: Firefox cold-launches the registered handler")
                 native_page.locator("#request-operation").wait_for()
-                assert native_page.locator("#request-version").inner_text() == ("4.1" if raw else "4")
+                assert native_page.locator("#request-version").inner_text() == "4.1"
                 print(f"Native review received: {scenario}", flush=True)
                 native_page.locator("#sign-language").click()
                 assert native_page.locator("#sign-document").count() == 0
@@ -261,6 +261,7 @@ for (const scenario of CASES) document.getElementById(scenario.name).onclick = (
                         assert response["code"] == "err-11:=AF500001 - Operation cancelled by user"
                     else:
                         assert response["type"] == "es.gob.afirma.core.AOCancelledOperationException"
+                        assert response["code"] == "AF500001"
                     assert "signature" not in response
                     evidence["checks"].append(f"{scenario}: native rejection reaches the browser without opening a certificate worker")
                     continue
@@ -296,7 +297,7 @@ for (const scenario of CASES) document.getElementById(scenario.name).onclick = (
                         assert response["code"] == "err-00:=AF200115 - Signing failed"
                     else:
                         assert response["type"] == "java.lang.Exception"
-                        assert response["code"].startswith("SAF_09:")
+                        assert response["code"] == "AF200115"
                     assert "signature" not in response
                     assert not windows_gui.processes(name="firmica-key-worker.exe", parent=pid)
                     evidence["checks"].append(f"{scenario}: worker failure returns no signature")

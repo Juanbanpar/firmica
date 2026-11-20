@@ -66,7 +66,7 @@ async function lifetime(asynchronous) {
     }
     await connect();
     const submitted = performance.now();
-    await page.evaluate(({session,asynchronous}) => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj${asynchronous ? '&format=CAdES&algorithm=SHA256withRSA' : ''}`),{session,asynchronous});
+    await page.evaluate(session => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj&format=CAdES&algorithm=SHA256withRSA`),session);
     await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
     if(asynchronous) {
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'asynchronous review must use the signing form');
@@ -81,8 +81,7 @@ async function lifetime(asynchronous) {
     } else {
       await page.waitForFunction(() => window.replies.includes('CANCEL'),null,{timeout:75000});
     }
-    const expiredStatus = asynchronous ? '#browser-status' : '#review-status';
-    await until(async () => (await native.evaluate(`document.querySelector("${expiredStatus}")?.textContent`))?.includes('caducado'),130000);
+    await until(async () => (await native.evaluate('document.querySelector("#browser-status")?.textContent'))?.includes('caducado'),130000);
     const elapsed = (performance.now() - (asynchronous ? started : submitted)) / 1000;
     const deadline = asynchronous ? 120 : 60;
     assert.ok(elapsed >= deadline - 5 && elapsed <= deadline + 15,

@@ -218,7 +218,7 @@ async fn received(socket: &mut Client) -> Message {
 #[tokio::test]
 async fn exact_origin_authorization_binds_a_session_and_its_result() {
     const OTHER: &str = "https://other.invalid:8443";
-    const INVALID_SESSION: &str = "SAF_46: Invalid WebSocket session";
+    const INVALID_SESSION: &str = "err-00:=AF620010 - Invalid WebSocket session";
     let mut peer = Peer::with_origins("4", &[ORIGIN, OTHER]).await;
     for headers in [
         &[][..],
@@ -286,11 +286,14 @@ async fn exact_origin_authorization_binds_a_session_and_its_result() {
         .send(Message::Text(poll.clone().into()))
         .await
         .unwrap();
-    assert_eq!(received(&mut owner).await.to_text().unwrap(), "CANCEL");
+    assert_eq!(
+        received(&mut owner).await.to_text().unwrap(),
+        "err-11:=AF500001 - Operation cancelled by user"
+    );
     owner.send(Message::Text(poll.into())).await.unwrap();
     assert_eq!(
         received(&mut owner).await.to_text().unwrap(),
-        super::ProtocolError::Unsupported.wire("4".parse().unwrap())
+        super::ProtocolError::Unsupported.wire("4.1".parse().unwrap())
     );
 }
 
@@ -303,7 +306,7 @@ async fn large_requests_authenticate_and_work_with_whole_or_fragmented_messages(
     socket.send(Message::Text(wrong.into())).await.unwrap();
     assert_eq!(
         received(&mut socket).await.to_text().unwrap(),
-        "SAF_46: Invalid WebSocket session"
+        "err-00:=AF620010 - Invalid WebSocket session"
     );
     assert!(peer.requests.try_recv().is_err());
     socket.close(None).await.unwrap();
@@ -345,11 +348,24 @@ async fn large_requests_authenticate_and_work_with_whole_or_fragmented_messages(
         pending.reply.send(Decision::Reject).unwrap();
         socket
             .send(Message::Text(
+                format!("getresult?idsession={SESSION}&extra=unexpected").into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            received(&mut socket).await.to_text().unwrap(),
+            "err-00:=AF620010 - Invalid WebSocket session",
+        );
+        socket
+            .send(Message::Text(
                 format!("getresult?idsession={SESSION}").into(),
             ))
             .await
             .unwrap();
-        assert_eq!(received(&mut socket).await.to_text().unwrap(), "CANCEL");
+        assert_eq!(
+            received(&mut socket).await.to_text().unwrap(),
+            "err-11:=AF500001 - Operation cancelled by user"
+        );
     }
 }
 
