@@ -27,7 +27,10 @@ fn provisioning_is_private_unique_and_verifiable_without_a_retained_ca_key() {
         names,
         ["ca.pem", "certificate.pem", "origin", "private-key.pem"]
     );
-    assert_eq!(load(&base).unwrap().unwrap().origin, ORIGIN);
+    assert_eq!(
+        load(&base).unwrap().unwrap().origins,
+        BTreeSet::from([ORIGIN.to_owned()])
+    );
     assert!(firmica_transport::load_tls(&profile.certificate, &profile.key).is_ok());
     let output = Command::new("openssl")
         .args([
@@ -167,6 +170,52 @@ fn existing_and_concurrently_created_profiles_are_never_replaced() {
     assert_eq!(fs::read_dir(base.join(PROFILE_PARENT)).unwrap().count(), 1);
 }
 
+#[test]
+fn legacy_origins_can_be_extended_and_revoked_without_changing_tls_identity() {
+    const OTHER: &str = "https://other.invalid:8443";
+    const THIRD: &str = "http://127.0.0.1:8080";
+    let temporary = tempfile::tempdir().unwrap();
+    let base = temporary.path().join("config");
+    let initial = initialize(&base, ORIGIN).unwrap();
+    let directory = profile_directory(&base).unwrap().unwrap();
+    let origin_file = directory.join("origin");
+    fs::write(&origin_file, ORIGIN).unwrap(); // Legacy file without a final newline.
+    let before = read_origins(&directory).unwrap();
+    std::thread::scope(|scope| {
+        let second = scope.spawn(|| update_origins(&directory, OTHER.into(), true));
+        let third = scope.spawn(|| update_origins(&directory, THIRD.into(), true));
+        second.join().unwrap().unwrap();
+        third.join().unwrap().unwrap();
+    });
+    let all = BTreeSet::from([ORIGIN.into(), OTHER.into(), THIRD.into()]);
+    assert_eq!(read_origins(&directory).unwrap(), all);
+    assert_eq!(before, BTreeSet::from([ORIGIN.into()]));
+    assert_eq!(update_origins(&directory, OTHER.into(), true).unwrap(), all);
+    assert!(matches!(
+        update_origins(&directory, "https://*.invalid".into(), true),
+        Err(Error::Origin)
+    ));
+    assert_eq!(read_origins(&directory).unwrap(), all);
+    for origin in [ORIGIN, OTHER, THIRD, THIRD] {
+        update_origins(&directory, origin.into(), false).unwrap();
+    }
+    assert!(read_origins(&directory).unwrap().is_empty());
+    let after = load(&base).unwrap().unwrap();
+    assert_eq!(after.leaf.to_der().unwrap(), initial.leaf.to_der().unwrap());
+    assert_eq!(
+        after.authority.to_der().unwrap(),
+        initial.authority.to_der().unwrap()
+    );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    for path in [origin_file.as_path(), &directory.join("origins.lock")] {
+        assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o600);
+    }
+    for invalid in [format!("{ORIGIN}\n{ORIGIN}\n"), format!("{ORIGIN}\n\n")] {
+        fs::write(&origin_file, invalid).unwrap();
+        assert!(matches!(read_origins(&directory), Err(Error::Origin)));
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn unsafe_permissions_symlinks_and_partial_profiles_fail_closed() {
@@ -175,7 +224,12 @@ fn unsafe_permissions_symlinks_and_partial_profiles_fail_closed() {
     assert!(load(&base).unwrap().is_none());
     let profile = initialize(&base, ORIGIN).unwrap();
     let directory = base.join(PROFILE_PARENT).join("browser-tls");
-    for path in [&base.join(PROFILE_PARENT), &directory, &profile.key] {
+    for path in [
+        &base.join(PROFILE_PARENT),
+        &directory,
+        &profile.key,
+        &directory.join("origin"),
+    ] {
         let original = fs::metadata(path).unwrap().permissions();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(load(&base), Err(Error::Permissions)));

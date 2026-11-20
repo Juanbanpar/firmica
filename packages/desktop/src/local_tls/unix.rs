@@ -64,18 +64,10 @@ pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
         .read(true)
         .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
         .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(Error::Permissions);
-    }
-    if metadata.len() > MAX_FILE_BYTES {
+    check_file(&file)?;
+    if file.metadata()?.len() > MAX_FILE_BYTES {
         return Err(Error::Invalid);
     }
-    #[cfg(target_os = "macos")]
-    crate::private_fs::ensure_no_acl(&file).map_err(|_| Error::Permissions)?;
     let mut bytes = SecretBox::new(Box::new(Vec::new()));
     use secrecy::ExposeSecretMut;
     file.take(MAX_FILE_BYTES + 1)
@@ -84,6 +76,39 @@ pub(super) fn read_private(path: &Path) -> Result<SecretBox<Vec<u8>>, Error> {
         return Err(Error::Invalid);
     }
     Ok(bytes)
+}
+
+fn check_file(file: &File) -> Result<(), Error> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(Error::Permissions);
+    }
+    #[cfg(target_os = "macos")]
+    crate::private_fs::ensure_no_acl(file).map_err(|_| Error::Permissions)?;
+    Ok(())
+}
+
+pub(super) fn lock(path: &Path) -> Result<File, Error> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
+        .open(path)?;
+    check_file(&file)?;
+    file.lock()?;
+    Ok(file)
+}
+
+pub(super) fn replace(staging: &Path, destination: &Path) -> Result<(), Error> {
+    fs::rename(staging, destination)?;
+    File::open(destination.parent().ok_or(Error::Directory)?)?.sync_all()?;
+    Ok(())
 }
 
 pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {

@@ -61,6 +61,10 @@ impl Peer {
     }
 
     pub(super) async fn configured(version: &str, origin: &str) -> Self {
+        Self::with_origins(version, &[origin]).await
+    }
+
+    async fn with_origins(version: &str, origins: &[&str]) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let certificate = directory.path().join("tls.pem");
         let key = directory.path().join("tls.key");
@@ -147,7 +151,12 @@ impl Peer {
         .unwrap();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = Server::with_listener(listener, bootstrap, tls, origin.into());
+        let server = Server::with_listener(
+            listener,
+            bootstrap,
+            tls,
+            origins.iter().map(|origin| (*origin).to_owned()).collect(),
+        );
         let (sender, requests) = mpsc::channel(1);
         let task = tokio::spawn(async move {
             server.run(sender).await.unwrap();
@@ -166,6 +175,13 @@ impl Peer {
     }
 
     async fn connect(&self) -> Client {
+        self.connect_with_origins(&[ORIGIN]).await.unwrap()
+    }
+
+    async fn connect_with_origins(
+        &self,
+        origins: &[&str],
+    ) -> Result<Client, tokio_tungstenite::tungstenite::Error> {
         let stream = TcpStream::connect(self.address).await.unwrap();
         let stream = TlsConnector::from(self.client.clone())
             .connect("127.0.0.1".try_into().unwrap(), stream)
@@ -174,10 +190,14 @@ impl Peer {
         let mut request = format!("wss://{}/", self.address)
             .into_client_request()
             .unwrap();
-        request
-            .headers_mut()
-            .insert("Origin", ORIGIN.parse().unwrap());
-        client_async(request, stream).await.unwrap().0
+        for origin in origins {
+            request
+                .headers_mut()
+                .append("Origin", origin.parse().unwrap());
+        }
+        client_async(request, stream)
+            .await
+            .map(|(socket, _)| socket)
     }
 }
 
@@ -193,6 +213,85 @@ async fn received(socket: &mut Client) -> Message {
         .unwrap()
         .unwrap()
         .unwrap()
+}
+
+#[tokio::test]
+async fn exact_origin_authorization_binds_a_session_and_its_result() {
+    const OTHER: &str = "https://other.invalid:8443";
+    const INVALID_SESSION: &str = "SAF_46: Invalid WebSocket session";
+    let mut peer = Peer::with_origins("4", &[ORIGIN, OTHER]).await;
+    for headers in [
+        &[][..],
+        &["https://example.invalid:443"],
+        &["https://other.invalid"],
+        &["https://sub.example.invalid"],
+        &[ORIGIN, OTHER],
+        &[ORIGIN, ORIGIN],
+    ] {
+        let error = peer.connect_with_origins(headers).await.unwrap_err();
+        assert!(matches!(
+            error,
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status() == 403
+        ));
+    }
+
+    let mut first = peer.connect().await;
+    first
+        .send(Message::Text("echo=-idsession=wrong@EOF".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        received(&mut first).await.to_text().unwrap(),
+        INVALID_SESSION
+    );
+
+    let mut owner = peer.connect_with_origins(&[OTHER]).await.unwrap();
+    let echo = format!("echo=-idsession={SESSION}@EOF");
+    owner
+        .send(Message::Text(echo.clone().into()))
+        .await
+        .unwrap();
+    assert_eq!(received(&mut owner).await.to_text().unwrap(), "OK");
+    first.send(Message::Text(echo.into())).await.unwrap();
+    assert_eq!(
+        received(&mut first).await.to_text().unwrap(),
+        INVALID_SESSION
+    );
+
+    owner
+        .send(Message::Text(
+            format!("afirma://sign?idsession={SESSION}&dat=AA==").into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(received(&mut owner).await.to_text().unwrap(), "#wait");
+    let pending = timeout(Duration::from_secs(5), peer.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    pending.reply.send(Decision::Reject).unwrap();
+    owner.close(None).await.unwrap();
+    let poll = format!("getresult?idsession={SESSION}");
+    first
+        .send(Message::Text(poll.clone().into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        received(&mut first).await.to_text().unwrap(),
+        INVALID_SESSION
+    );
+    let mut owner = peer.connect_with_origins(&[OTHER]).await.unwrap();
+    owner
+        .send(Message::Text(poll.clone().into()))
+        .await
+        .unwrap();
+    assert_eq!(received(&mut owner).await.to_text().unwrap(), "CANCEL");
+    owner.send(Message::Text(poll.into())).await.unwrap();
+    assert_eq!(
+        received(&mut owner).await.to_text().unwrap(),
+        super::ProtocolError::Unsupported.wire("4".parse().unwrap())
+    );
 }
 
 #[tokio::test]

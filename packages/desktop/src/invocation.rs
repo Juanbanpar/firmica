@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use firmica_core::{Inbox, IncomingReview, ReviewOutcome};
 use firmica_protocol::{Operation, ProtocolRequest, WebSocketBootstrap};
 use firmica_transport::{Decision, PendingRequest, Server};
-use std::{path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeSet, path::PathBuf, sync::OnceLock};
 
 static INBOX: OnceLock<Inbox> = OnceLock::new();
 #[cfg(windows)]
@@ -43,6 +43,25 @@ enum LocalCommand {
     },
 }
 
+enum BrowserOrigins {
+    Explicit(String),
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    Managed,
+}
+
+impl BrowserOrigins {
+    async fn snapshot(&self) -> Option<BTreeSet<String>> {
+        match self {
+            Self::Explicit(origin) => Some(BTreeSet::from([origin.clone()])),
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+            Self::Managed => tokio::task::spawn_blocking(crate::local_tls::load_default_origins)
+                .await
+                .ok()?
+                .ok(),
+        }
+    }
+}
+
 pub fn launch(app: fn() -> Element) -> Result<(), String> {
     let args = Arguments::parse();
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
@@ -74,26 +93,24 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
     if let Some(origin) = &origin {
         firmica_transport::validate_origin(origin).map_err(|e| e.to_string())?;
     }
-    let (tls, origin) = match (&args.tls_cert, &args.tls_key) {
-        (Some(cert), Some(key)) => (
-            Some(firmica_transport::load_tls(cert, key).map_err(|e| e.to_string())?),
-            origin,
-        ),
+    let browser_tls = match (&args.tls_cert, &args.tls_key, origin) {
+        (Some(cert), Some(key), Some(origin)) => Some((
+            firmica_transport::load_tls(cert, key).map_err(|e| e.to_string())?,
+            BrowserOrigins::Explicit(origin),
+        )),
         _ => {
             #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             if let Some(profile) = crate::local_tls::load_default().map_err(|e| e.to_string())? {
-                (
-                    Some(
-                        firmica_transport::load_tls(&profile.certificate, &profile.key)
-                            .map_err(|e| e.to_string())?,
-                    ),
-                    Some(profile.origin),
-                )
+                Some((
+                    firmica_transport::load_tls(&profile.certificate, &profile.key)
+                        .map_err(|e| e.to_string())?,
+                    BrowserOrigins::Managed,
+                ))
             } else {
-                (None, None)
+                None
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-            (None, None)
+            None
         }
     };
     let initial = args.uri;
@@ -111,18 +128,23 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                     eprintln!("Firmica: WSS session already active");
                     continue;
                 }
-                let Some(tls) = tls.clone() else {
+                let Some((tls, origins)) = &browser_tls else {
                     eprintln!("Firmica: WSS requires TLS configuration");
-                    continue;
-                };
-                let Some(origin) = origin.clone() else {
                     continue;
                 };
                 let Ok(bootstrap) = WebSocketBootstrap::from_request(&request) else {
                     eprintln!("Firmica: unsupported WSS bootstrap");
                     continue;
                 };
-                let server = match Server::bind(bootstrap, tls, origin).await {
+                let Some(origins) = origins.snapshot().await else {
+                    eprintln!("Firmica: cannot read authorized browser origins");
+                    continue;
+                };
+                if origins.is_empty() {
+                    eprintln!("Firmica: no browser origins authorized");
+                    continue;
+                }
+                let server = match Server::bind_origins(bootstrap, tls.clone(), origins).await {
                     Ok(server) => server,
                     Err(_) => {
                         eprintln!("Firmica: cannot bind WSS listener");
@@ -225,6 +247,18 @@ mod tests {
         ])
         .is_ok());
         assert!(Arguments::try_parse_from(["firmica", "tls", "status"]).is_ok());
+        assert!(Arguments::try_parse_from(["firmica", "tls", "origins", "list"]).is_ok());
+        for command in ["add", "remove"] {
+            assert!(Arguments::try_parse_from([
+                "firmica",
+                "tls",
+                "origins",
+                command,
+                "https://example.invalid",
+            ])
+            .is_ok());
+            assert!(Arguments::try_parse_from(["firmica", "tls", "origins", command]).is_err());
+        }
         assert!(Arguments::try_parse_from(["firmica", "afirma://save?ver=4"]).is_ok());
         assert!(Arguments::try_parse_from([
             "firmica",

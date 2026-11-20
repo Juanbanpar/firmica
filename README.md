@@ -123,7 +123,17 @@ The TLS commands work without a graphical session on Linux, macOS and Windows. O
 
 Setup prints the public `ca.pem` path and its SHA-256 fingerprint. Check that fingerprint before importing the CA into the intended browser profile for website authentication. In Firefox, use **Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import**. The TLS commands do not install trust entries, change TLS verification or alter URI associations. Keep browser trust scoped to the profile that needs it.
 
-Restart Firmica after setup. The packaged `afirma` handler loads this profile automatically, including on a cold browser launch, and permits only the configured origin. To change websites, edit the profile's `origin` file to contain one exact HTTP(S) origin and restart. To renew an expired identity, stop Firmica, move the private `browser-tls` directory aside and run `tls init` again. Import the new CA and remove the old browser trust entry; renewal cannot reuse the discarded CA key. Missing, expired, mismatched or insecure profile files cause startup to fail.
+Restart Firmica after initial setup. The packaged `afirma` handler loads the profile automatically, including on a cold browser launch. Manage authorized websites with exact HTTP(S) origins, including any non-default port. Wildcards and paths are rejected.
+
+```sh
+firmica tls origins list
+firmica tls origins add https://signing.example.org
+firmica tls origins remove https://example.org
+```
+
+All origins use the same loopback TLS identity and existing browser trust. Firmica reads the current list for each new listener. Changes take effect on the next listener, after any active listener ends or Firmica quits. Each session stays bound to the origin of its first authenticated message, including when the browser reconnects to retrieve the result. Removing every origin disables new browser sessions.
+
+To renew an expired identity, stop Firmica, move the private `browser-tls` directory aside and run `tls init` again. Re-add any other authorized origins. Import the new CA and remove the old browser trust entry, since renewal cannot reuse the discarded CA key. Missing, expired, mismatched or insecure profile files cause startup to fail.
 
 Explicit TLS settings override the per-user profile. Supply all three options to the first process:
 

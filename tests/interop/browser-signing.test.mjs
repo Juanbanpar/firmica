@@ -57,6 +57,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       res.end(req.url === '/autoscript.js' ? script : req.url === '/protocol41.js' ? protocol41Script : html);
     });
     let child, browser, native, xenv;
+    let tlsCommand;
     let stderr = '';
     try {
       await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -86,11 +87,11 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       }
       if (managed) {
         const options = {env:{...process.env,XDG_CONFIG_HOME:config},encoding:'utf8',stdio:['ignore','pipe','pipe']};
-        const output = execFileSync(binary,['tls','init','--origin',origin],options);
-        assert.equal(execFileSync(binary,['tls','status'],options),output);
+        tlsCommand = (...args) => execFileSync(binary,['tls',...args],options);
+        const output = tlsCommand('init','--origin','https://initial.invalid');
+        assert.equal(tlsCommand('status'),output);
         const fingerprint = openssl(['x509','-in',path.join(config,'firmica/browser-tls/ca.pem'),'-noout','-sha256','-fingerprint']).toString().trim().split('=').at(-1);
         assert.ok(output.includes(`CA SHA-256: ${fingerprint}`));
-        assert.ok(output.includes(`Origin: ${origin}`));
       }
       execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
       execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Synthetic local WSS','-t','C,,','-i',
@@ -116,6 +117,11 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       {env,cwd:dir,stdio:['ignore','ignore','pipe'],detached:true});
       child.stderr.on('data', bytes => {stderr += bytes;});
       native = await inspector(port);
+      if (managed) {
+        // Update the authorization list while the desktop process is already running.
+        tlsCommand('origins','add',origin);
+        assert.ok(tlsCommand('origins','list').includes(`Origin: ${origin}\n`));
+      }
       const [display,authority,busAddress,appPid] = (await readFile(path.join(dir,'display'),'utf8')).split('\n');
       xenv = {...env,DISPLAY:display,XAUTHORITY:authority,DBUS_SESSION_BUS_ADDRESS:busAddress};
       const xdo = args => execFileSync('xdotool',args,{env:xenv,encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();

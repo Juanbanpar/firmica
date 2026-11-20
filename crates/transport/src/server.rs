@@ -1,6 +1,7 @@
 use crate::{connection, session::Session, validate_origin, PendingRequest, TransportError};
 use firmica_protocol::WebSocketBootstrap;
 use std::{
+    collections::BTreeSet,
     io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -13,26 +14,43 @@ use tokio::{
 };
 use tokio_rustls::rustls;
 
-/// Listener bound only to IPv4 loopback. Origin is an explicit local setting,
-/// never an identity supplied by the invocation. Server lifetime is at most 120 s.
+/// IPv4 loopback listener with a fixed set of explicitly authorized browser
+/// origins. Server lifetime is at most 120 seconds.
 pub struct Server {
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
-    origin: String,
+    origins: Arc<BTreeSet<String>>,
     session: Arc<Mutex<Session>>,
 }
 
 impl Server {
+    /// Binds a listener for one explicitly authorized browser origin.
     pub async fn bind(
         bootstrap: WebSocketBootstrap,
         tls: Arc<rustls::ServerConfig>,
         origin: String,
     ) -> Result<Self, TransportError> {
-        validate_origin(&origin)?;
+        Self::bind_origins(bootstrap, tls, BTreeSet::from([origin])).await
+    }
+
+    /// Binds a listener with an immutable authorization snapshot. Every origin
+    /// must be canonical, and an empty set is rejected. The first authenticated
+    /// message binds the session to its connection's origin, including reconnects.
+    pub async fn bind_origins(
+        bootstrap: WebSocketBootstrap,
+        tls: Arc<rustls::ServerConfig>,
+        origins: BTreeSet<String>,
+    ) -> Result<Self, TransportError> {
+        if origins.is_empty() {
+            return Err(TransportError::Origin);
+        }
+        for origin in &origins {
+            validate_origin(origin)?;
+        }
         let mut last_error = None;
         for port in &bootstrap.ports {
             match TcpListener::bind((Ipv4Addr::LOCALHOST, *port)).await {
-                Ok(listener) => return Ok(Self::with_listener(listener, bootstrap, tls, origin)),
+                Ok(listener) => return Ok(Self::with_listener(listener, bootstrap, tls, origins)),
                 Err(error) => last_error = Some(error),
             }
         }
@@ -45,12 +63,12 @@ impl Server {
         listener: TcpListener,
         bootstrap: WebSocketBootstrap,
         tls: Arc<rustls::ServerConfig>,
-        origin: String,
+        origins: BTreeSet<String>,
     ) -> Self {
         Self {
             listener,
             tls,
-            origin,
+            origins: Arc::new(origins),
             session: Arc::new(Mutex::new(Session::new(bootstrap))),
         }
     }
@@ -75,13 +93,13 @@ impl Server {
                     if remote.ip() != Ipv4Addr::LOCALHOST { continue; }
                     let Ok(permit) = permits.clone().try_acquire_owned() else { continue; };
                     let tls = self.tls.clone();
-                    let origin = self.origin.clone();
+                    let origins = self.origins.clone();
                     let session = self.session.clone();
                     let requests = requests.clone();
                     tasks.spawn(async move {
                         let _permit = permit;
                         // Errors contain library-provided untrusted details; do not log them.
-                        let _ = timeout(Duration::from_secs(90), connection::handle(stream, tls, origin, session, requests)).await;
+                        let _ = timeout(Duration::from_secs(90), connection::handle(stream, tls, origins, session, requests)).await;
                     });
                 }
             }

@@ -5,7 +5,7 @@ use firmica_protocol::{
     Operation, ParseError, ProtocolRequest, MAX_URI_BYTES, MAX_WEBSOCKET_REQUEST_BYTES,
 };
 use futures_util::{SinkExt, StreamExt};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, Mutex},
@@ -24,7 +24,7 @@ use tokio_tungstenite::{
 pub(super) async fn handle(
     stream: TcpStream,
     tls: Arc<rustls::ServerConfig>,
-    origin: String,
+    origins: Arc<BTreeSet<String>>,
     session: Arc<Mutex<Session>>,
     requests: mpsc::Sender<PendingRequest>,
 ) -> Result<(), TransportError> {
@@ -39,17 +39,21 @@ pub(super) async fn handle(
         .max_write_buffer_size(
             firmica_protocol::signing::MAX_SIGN_RESPONSE_BYTES + 128 * 1024 + 14,
         );
+    let mut origin = None;
     // Tungstenite requires its concrete HTTP ErrorResponse as the callback error type.
     #[allow(clippy::result_large_err)]
-    let callback = move |request: &Request, response: Response| {
-        let origin_ok = request
-            .headers()
-            .get("origin")
-            .and_then(|v| v.to_str().ok())
-            == Some(origin.as_str());
+    let callback = |request: &Request, response: Response| {
+        let mut headers = request.headers().get_all("origin").iter();
+        let authorized = headers
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| origins.get(value));
         let host_ok = request.headers().get("host").and_then(|v| v.to_str().ok())
             == Some(expected_host.as_str());
-        if origin_ok && host_ok && request.uri().path() == "/" {
+        if let Some(authorized) = authorized
+            .filter(|_| headers.next().is_none() && host_ok && request.uri().path() == "/")
+        {
+            origin = Some(authorized);
             Ok(response)
         } else {
             Err(tungstenite::http::Response::builder()
@@ -64,6 +68,7 @@ pub(super) async fn handle(
     )
     .await
     .map_err(|_| TransportError::Timeout)??;
+    let origin = origin.ok_or(TransportError::Origin)?;
     while let Some(message) = timeout(Duration::from_secs(60), socket.next())
         .await
         .map_err(|_| TransportError::Timeout)?
@@ -99,7 +104,7 @@ pub(super) async fn handle(
             Some(Ok(request)) => request.parameter("idsession") == Some(state.bootstrap.session()),
             _ => state.authenticated(&message),
         };
-        let response = if !authenticated {
+        let response = if !authenticated || !state.accept_origin(origin) {
             ProtocolError::Session.wire(version)
         } else if message.starts_with("echo=-idsession=") {
             "OK".into()
