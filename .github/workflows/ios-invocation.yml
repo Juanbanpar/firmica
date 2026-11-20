@@ -2,26 +2,6 @@ name: iOS invocation
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/ios-invocation.yml'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/**'
-      - 'packages/mobile/**'
-      - 'packages/ui/**'
-      - 'tools/xtask/**'
-      - 'tests/interop/ios/**'
-  pull_request:
-    paths:
-      - '.github/workflows/ios-invocation.yml'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/**'
-      - 'packages/mobile/**'
-      - 'packages/ui/**'
-      - 'tools/xtask/**'
-      - 'tests/interop/ios/**'
 
 permissions:
   contents: read
