@@ -8,8 +8,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use firmica_cades::{SigningOptions, MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CONTENT_BYTES};
+use firmica_cades::SigningOptions;
 use firmica_signing::format::Format;
+use firmica_signing::limits::{MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CONTENT_BYTES};
 use firmica_signing::{CertificateIdentity, SignatureAlgorithm, SigningKey};
 use firmica_validation::{
     assess_document_signing, AssessmentError, CertificateAssessment, Restriction,

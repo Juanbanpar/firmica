@@ -1,15 +1,39 @@
 //! Real TLS/WebSocket boundary tests. All credentials and trust are ephemeral.
-use super::*;
-use std::process::Command;
-use tokio::io::AsyncWriteExt;
-use tokio_rustls::{client::TlsStream, TlsConnector};
+use super::{load_tls, Decision, PendingRequest, Server};
+use firmica_protocol::{
+    ProtocolRequest, WebSocketBootstrap, MAX_URI_BYTES, MAX_WEBSOCKET_REQUEST_BYTES,
+};
+use futures_util::{SinkExt, StreamExt};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    process::Command,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+    sync::mpsc,
+    time::timeout,
+};
+use tokio_rustls::{
+    client::TlsStream,
+    rustls::{
+        self,
+        pki_types::{pem::PemObject, CertificateDer},
+    },
+    TlsConnector,
+};
 use tokio_tungstenite::{
     client_async,
     tungstenite::{
         client::IntoClientRequest,
-        protocol::frame::{
-            coding::{Data, OpCode},
-            Frame,
+        protocol::{
+            frame::{
+                coding::{CloseCode, Data, OpCode},
+                Frame,
+            },
+            Message,
         },
     },
     WebSocketStream,
@@ -123,16 +147,7 @@ impl Peer {
         .unwrap();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = Server {
-            listener,
-            tls,
-            origin: origin.into(),
-            session: Arc::new(Mutex::new(Session {
-                bootstrap,
-                used: false,
-                result: None,
-            })),
-        };
+        let server = Server::with_listener(listener, bootstrap, tls, origin.into());
         let (sender, requests) = mpsc::channel(1);
         let task = tokio::spawn(async move {
             server.run(sender).await.unwrap();

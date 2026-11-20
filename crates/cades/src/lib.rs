@@ -63,14 +63,8 @@ const SIGNING_CERTIFICATE_V2: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.47");
 const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
 
-/// Maximum input content length, including content used for a detached signature (16 MiB).
-pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum number of supplied certificates, including duplicates and the leaf.
-pub const MAX_CERTIFICATES: usize = 32;
-/// Maximum DER length of each supplied certificate (64 KiB).
-pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
-
 pub use firmica_signing::format::ContentMode;
+pub use firmica_signing::limits::{MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES, MAX_CONTENT_BYTES};
 
 /// Explicit choices for one signing operation; no algorithm or clock defaults.
 #[derive(Clone, Copy, Debug)]

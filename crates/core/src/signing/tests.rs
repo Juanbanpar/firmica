@@ -1,5 +1,5 @@
 use super::*;
-use firmica_cades::ContentMode;
+use firmica_signing::format::ContentMode;
 use firmica_signing::{InputKind, Signature, SigningCapability, SigningError, SigningInput};
 use std::time::{Duration, UNIX_EPOCH};
 

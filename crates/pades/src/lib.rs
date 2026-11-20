@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use firmica_signing::limits::{MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES};
 use firmica_signing::{SignatureAlgorithm, SigningKey};
 use lopdf::{
     dictionary, Dictionary, Document, IncrementalDocument, LoadOptions, Object, Stream,
@@ -19,8 +20,7 @@ use lopdf::{
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 
-/// Maximum original PDF size (16 MiB).
-pub const MAX_CONTENT_BYTES: usize = firmica_cades::MAX_CONTENT_BYTES;
+pub use firmica_signing::limits::MAX_CONTENT_BYTES;
 /// Maximum output size, including certificate space and the incremental revision.
 pub const MAX_SIGNATURE_BYTES: usize = MAX_CONTENT_BYTES + 5 * 1024 * 1024;
 const RANGE: &[u8] = b"[0 9999999999 9999999999 9999999999]";
@@ -226,10 +226,10 @@ pub fn sign(
 ) -> Result<Vec<u8>, PadesError> {
     let doc = parse(pdf, options)?;
     let identity = key.identity();
-    if identity.additional_certificates.len() >= firmica_cades::MAX_CERTIFICATES
+    if identity.additional_certificates.len() >= MAX_CERTIFICATES
         || std::iter::once(&identity.certificate_der)
             .chain(&identity.additional_certificates)
-            .any(|cert| cert.len() > firmica_cades::MAX_CERTIFICATE_BYTES)
+            .any(|cert| cert.len() > MAX_CERTIFICATE_BYTES)
     {
         return Err(PadesError::InputTooLarge);
     }

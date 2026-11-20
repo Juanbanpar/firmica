@@ -1,14 +1,21 @@
 //! Browser wire conformance; AutoScript itself still negotiates protocol 4.
-use super::{transfer_tests::Peer, *};
+use super::{transfer_tests::Peer, Decision};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use firmica_protocol::{Operation, ProtocolVersion};
 use serde_json::json;
 use std::{
     fs,
     io::Write,
+    net::Ipv4Addr,
+    path::Path,
     process::{Child, Command, Stdio},
-    time::Instant,
+    time::{Duration, Instant},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::{mpsc, oneshot},
+};
 
 struct Browser(Child);
 impl Drop for Browser {

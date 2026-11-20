@@ -1,5 +1,5 @@
 use super::*;
-use firmica_cades::ContentMode;
+use firmica_signing::format::ContentMode;
 use firmica_signing::format::{Format, PdfOptions, XmlMode};
 
 #[test]
