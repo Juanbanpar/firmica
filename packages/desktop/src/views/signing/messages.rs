@@ -15,7 +15,9 @@ pub(super) enum Status {
     Idle,
     Opening,
     Ready,
+    ChoosingDestination,
     Signing,
+    Cancelling,
     Cancelled,
     Saved,
     Failed(Error),
@@ -50,7 +52,20 @@ impl Status {
                 "Review the details before authorizing signing.",
             )
             .to_owned(),
+            Self::ChoosingDestination => tr(
+                spanish,
+                "Elige dónde guardar la firma.",
+                "Choose where to save the signature.",
+            )
+            .to_owned(),
+            Self::Signing if external => tr(
+                spanish,
+                "Firmando para el navegador…",
+                "Signing for the browser…",
+            )
+            .to_owned(),
             Self::Signing => tr(spanish, "Firmando y guardando…", "Signing and saving…").to_owned(),
+            Self::Cancelling => tr(spanish, "Cancelando…", "Cancelling…").to_owned(),
             Self::Cancelled => {
                 tr(spanish, "Operación cancelada.", "Operation cancelled.").to_owned()
             }

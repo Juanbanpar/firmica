@@ -8,6 +8,7 @@ pub fn InvocationReview(on_pending: Option<EventHandler<bool>>) -> Element {
     let inbox = use_context::<Inbox>();
     let mut review = use_signal(Review::default);
     let mut reply = use_signal(|| None::<async_channel::Sender<ReviewOutcome>>);
+    let mut browser_origin = use_signal(|| None::<String>);
     let mut spanish = use_signal(|| true);
     use_future(move || {
         let inbox = inbox.clone();
@@ -37,6 +38,7 @@ pub fn InvocationReview(on_pending: Option<EventHandler<bool>>) -> Element {
                         handler.call(true);
                     }
                     reply.set(incoming.reply.clone());
+                    browser_origin.set(incoming.browser_origin);
                     if let Some(sender) = incoming.reply {
                         spawn(async move {
                             sender.closed().await;
@@ -61,6 +63,7 @@ pub fn InvocationReview(on_pending: Option<EventHandler<bool>>) -> Element {
     });
     let request = review.read().request().cloned();
     let state = review.read().state;
+    let origin = browser_origin.read().clone();
     let es = spanish();
     let mut decide = move |outcome| {
         let rejected = matches!(outcome, ReviewOutcome::Rejected);
@@ -99,14 +102,21 @@ pub fn InvocationReview(on_pending: Option<EventHandler<bool>>) -> Element {
                 }
                 if let Some(request) = request {
                     p { class: "mb-4", role: "alert",
-                        if es { "El origen de esta solicitud no está autenticado. No se ha autorizado ninguna firma." }
-                        else { "The request origin is unauthenticated. No signature has been authorized." }
+                        if origin.is_none() {
+                            if es { "El origen de esta solicitud no está autenticado. No se ha autorizado ninguna firma." }
+                            else { "The request origin is unauthenticated. No signature has been authorized." }
+                        } else if es { "Esta operación solo admite revisión y cancelación." }
+                        else { "This operation supports review and cancellation only." }
                     }
                     dl { class: "mb-6 grid grid-cols-2 gap-3",
                         dt { if es { "Operación" } else { "Operation" } }
                         dd { id: "request-operation", class: "font-mono", "{request.operation.as_str()}" }
                         dt { if es { "Versión del protocolo" } else { "Protocol version" } }
                         dd { id: "request-version", "{request.version}" }
+                        if let Some(origin) = origin {
+                            dt { if es { "Origen autorizado" } else { "Authorized origin" } }
+                            dd { id: "request-origin", class: "break-all", "{origin}" }
+                        }
                     }
                     p { class: "mb-6 text-sm",
                         if es { "Solo se ha analizado la estructura de la invocación. No se han leído documentos ni accedido a certificados." }

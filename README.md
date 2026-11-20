@@ -83,7 +83,7 @@ Open **Sign a document**, select a document and a `.p12`/`.pfx` certificate, and
 
 The encoders use baseline B-B building blocks; no conformance assessment, trusted timestamps, long-term validation evidence or signature policies are provided. Output extensions are `.csig`, `.pdf` and `.xsig` respectively.
 
-**Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog; cancelling it preserves the review. **Cancel** closes the certificate worker without signing.
+**Open and review** shows the frozen document's name, size and SHA-256, the certificate's claimed subject/issuer, serial, fingerprint and validity, and the signing choices. The certificate signature, chain trust, revocation and legal qualification remain unchecked. Approval requires acknowledging those unchecked items. **Sign and save** opens a destination dialog. Dismissing it preserves the review. **Cancel** closes the certificate worker and returns to the selected files. Preparing a new review requires entering the password again. **Stop operation** requests cancellation while Firmica is opening the certificate or signing.
 
 Choose a new destination: existing files and symlinks are never replaced. Output is published only after signing and worker cleanup succeed. Linux and macOS outputs use mode 0600; Windows outputs inherit the destination directory ACL, so choose a private directory. For a detached signature, retain the exact original document alongside the `.csig` file. Changing the source file after review does not change the bytes signed. No system certificate store is opened, and browser requests cannot authorize this local workflow.
 
@@ -123,7 +123,7 @@ The TLS commands work without a graphical session on Linux, macOS and Windows. O
 
 Setup prints the public `ca.pem` path and its SHA-256 fingerprint. Check that fingerprint before importing the CA into the intended browser profile for website authentication. In Firefox, use **Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import**. The TLS commands do not install trust entries, change TLS verification or alter URI associations. Keep browser trust scoped to the profile that needs it.
 
-Restart Firmica after initial setup. The packaged `afirma` handler loads the profile automatically, including on a cold browser launch. Manage authorized websites with exact HTTP(S) origins, including any non-default port. Wildcards and paths are rejected.
+Open **Browser setup** to create the profile, check its status and expiration, and authorize or revoke website origins. This screen shows the public trust certificate path and fingerprint for manual browser import. The packaged `afirma` handler loads the profile automatically, including on a cold browser launch. Origin entries require an exact HTTP(S) origin including any non-default port. Wildcards and paths are rejected. The same list is available from the command line.
 
 ```sh
 firmica tls origins list
@@ -133,7 +133,7 @@ firmica tls origins remove https://example.org
 
 All origins use the same loopback TLS identity and existing browser trust. Firmica reads the current list for each new listener. Changes take effect on the next listener, after any active listener ends or Firmica quits. Each session stays bound to the origin of its first authenticated message, including when the browser reconnects to retrieve the result. Removing every origin disables new browser sessions.
 
-To renew an expired identity, stop Firmica, move the private `browser-tls` directory aside and run `tls init` again. Re-add any other authorized origins. Import the new CA and remove the old browser trust entry, since renewal cannot reuse the discarded CA key. Missing, expired, mismatched or insecure profile files cause startup to fail.
+To renew an expired identity, stop Firmica, move the private `browser-tls` directory aside, and create a new profile. Re-add any other authorized origins. Import the new CA and remove the old browser trust entry, since renewal cannot reuse the discarded CA key. Missing, expired, mismatched or insecure profiles prevent browser signing and can be diagnosed in **Browser setup**.
 
 Explicit TLS settings override the per-user profile. Supply all three options to the first process:
 
@@ -148,7 +148,7 @@ On Linux, macOS and Windows, protocol 4.x WSS `sign` requests can return a signa
 
 AutoScript 1.10.1 advertises `v=4&jvc=4`, which selects asynchronous protocol 4.1 and structured error codes. Older script codes can use synchronous protocol 4 with legacy errors. Signing properties accept UTF-8, comments, and Java property separators such as `mode=explicit` and `mode : explicit`. Escapes, continuations and duplicate keys are rejected. Unsupported sign options return an error before review.
 
-The signing screen fixes the document and signing choices from the request, shows their hash and the selected certificate, and warns that the request origin is unauthenticated. **Sign and send to browser** returns the reviewed certificate and signed result to that session after worker cleanup; no destination file is written. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
+The signing screen shows the browser origin checked by the listener, the document hash, the fixed signing choices and the selected certificate. Direct URI invocations do not provide a verified browser origin. **Sign and send to browser** returns the reviewed certificate and signed result to that session after worker cleanup. Navigating away cancels the request. Each bootstrap admits one operation, its result can be retrieved once, and the listener expires after 120 seconds. A new bootstrap can start after the listener ends.
 
 Do not install test certificates globally. Chromium tests pin one ephemeral public key. The Firefox OS-handler test provisions TLS with `firmica tls init`, trusts its CA only in a disposable profile and checks that a fresh profile rejects it. Tests use an isolated XDG association without replacing the user's default handler.
 

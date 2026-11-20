@@ -199,11 +199,10 @@ impl Prepared {
                 .map_err(Error::Approval)
         };
         worker.close().map_err(Error::Worker)?;
-        let signature = result?;
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
-        Ok((certificate, signature))
+        Ok((certificate, result?))
     }
 }
 

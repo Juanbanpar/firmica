@@ -45,6 +45,7 @@ fn receive_invocation(uri: &str) -> bool {
         .sender
         .try_send(firmica_core::IncomingReview {
             request,
+            browser_origin: None,
             reply: None,
         })
         .is_ok()

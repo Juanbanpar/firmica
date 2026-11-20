@@ -112,11 +112,35 @@ pub enum Error {
 }
 
 pub struct Profile {
-    origins: BTreeSet<String>,
+    pub origins: BTreeSet<String>,
     pub certificate: PathBuf,
     pub key: PathBuf,
     authority: X509,
     leaf: X509,
+}
+
+/// The public information needed to configure browser trust.
+pub struct ProfileStatus {
+    pub origins: BTreeSet<String>,
+    pub trust_certificate: PathBuf,
+    pub fingerprint: String,
+    pub expires: String,
+}
+
+impl Profile {
+    fn status(self) -> Result<ProfileStatus, Error> {
+        let fingerprint = self.authority.digest(MessageDigest::sha256())?;
+        Ok(ProfileStatus {
+            origins: self.origins,
+            trust_certificate: self.certificate.with_file_name("ca.pem"),
+            fingerprint: fingerprint
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<Vec<_>>()
+                .join(":"),
+            expires: self.leaf.not_after().to_string(),
+        })
+    }
 }
 
 pub fn execute(command: Command) -> Result<(), Error> {
@@ -135,19 +159,11 @@ pub fn execute(command: Command) -> Result<(), Error> {
             return Ok(());
         }
     };
-    print_origins(&profile.origins);
-    println!(
-        "Trust certificate: {}",
-        profile.certificate.with_file_name("ca.pem").display()
-    );
-    let fingerprint = profile.authority.digest(MessageDigest::sha256())?;
-    let fingerprint = fingerprint
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect::<Vec<_>>()
-        .join(":");
-    println!("CA SHA-256: {fingerprint}");
-    println!("Expires: {}", profile.leaf.not_after());
+    let status = profile.status()?;
+    print_origins(&status.origins);
+    println!("Trust certificate: {}", status.trust_certificate.display());
+    println!("CA SHA-256: {}", status.fingerprint);
+    println!("Expires: {}", status.expires);
     println!("No trust store was changed. The CA signing key is not retained.");
     Ok(())
 }
@@ -165,8 +181,19 @@ pub fn load_default() -> Result<Option<Profile>, Error> {
     load(&storage::config_base()?)
 }
 
-pub fn load_default_origins() -> Result<BTreeSet<String>, Error> {
-    read_origins(&profile_directory(&storage::config_base()?)?.ok_or(Error::Missing)?)
+pub fn default_status() -> Result<Option<ProfileStatus>, Error> {
+    load_default()?.map(Profile::status).transpose()
+}
+
+pub fn initialize_default(origin: &str) -> Result<ProfileStatus, Error> {
+    initialize(&storage::config_base()?, origin)?.status()
+}
+
+pub fn update_default_origin(origin: String, add: bool) -> Result<ProfileStatus, Error> {
+    let directory = profile_directory(&storage::config_base()?)?.ok_or(Error::Missing)?;
+    let mut profile = read_profile(&directory)?;
+    profile.origins = update_origins(&directory, origin, add)?;
+    profile.status()
 }
 
 fn initialize(base: &Path, origin: &str) -> Result<Profile, Error> {

@@ -3,8 +3,12 @@ use clap::Parser;
 use dioxus::prelude::*;
 use firmica_core::{Inbox, IncomingReview, ReviewOutcome};
 use firmica_protocol::{Operation, ProtocolRequest, WebSocketBootstrap};
-use firmica_transport::{Decision, PendingRequest, Server};
-use std::{collections::BTreeSet, path::PathBuf, sync::OnceLock};
+use firmica_transport::{Decision, PendingRequest, Server, ServerConfig};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 static INBOX: OnceLock<Inbox> = OnceLock::new();
 #[cfg(windows)]
@@ -43,21 +47,27 @@ enum LocalCommand {
     },
 }
 
-enum BrowserOrigins {
-    Explicit(String),
+enum BrowserTls {
+    Explicit(Arc<ServerConfig>, String),
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Managed,
 }
 
-impl BrowserOrigins {
-    async fn snapshot(&self) -> Option<BTreeSet<String>> {
+impl BrowserTls {
+    async fn snapshot(&self) -> Result<(Arc<ServerConfig>, BTreeSet<String>), &'static str> {
         match self {
-            Self::Explicit(origin) => Some(BTreeSet::from([origin.clone()])),
+            Self::Explicit(tls, origin) => Ok((tls.clone(), BTreeSet::from([origin.clone()]))),
             #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-            Self::Managed => tokio::task::spawn_blocking(crate::local_tls::load_default_origins)
-                .await
-                .ok()?
-                .ok(),
+            Self::Managed => tokio::task::spawn_blocking(|| {
+                let profile = crate::local_tls::load_default()
+                    .map_err(|_| "invalid local TLS profile")?
+                    .ok_or("WSS requires TLS configuration")?;
+                let tls = firmica_transport::load_tls(&profile.certificate, &profile.key)
+                    .map_err(|_| "invalid local TLS identity")?;
+                Ok((tls, profile.origins))
+            })
+            .await
+            .map_err(|_| "cannot load the local TLS profile")?,
         }
     }
 }
@@ -94,23 +104,16 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
         firmica_transport::validate_origin(origin).map_err(|e| e.to_string())?;
     }
     let browser_tls = match (&args.tls_cert, &args.tls_key, origin) {
-        (Some(cert), Some(key), Some(origin)) => Some((
+        (Some(cert), Some(key), Some(origin)) => Some(BrowserTls::Explicit(
             firmica_transport::load_tls(cert, key).map_err(|e| e.to_string())?,
-            BrowserOrigins::Explicit(origin),
+            origin,
         )),
         _ => {
             #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-            if let Some(profile) = crate::local_tls::load_default().map_err(|e| e.to_string())? {
-                Some((
-                    firmica_transport::load_tls(&profile.certificate, &profile.key)
-                        .map_err(|e| e.to_string())?,
-                    BrowserOrigins::Managed,
-                ))
-            } else {
-                None
-            }
+            let configuration = Some(BrowserTls::Managed);
             #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-            None
+            let configuration = None;
+            configuration
         }
     };
     let initial = args.uri;
@@ -128,7 +131,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                     eprintln!("Firmica: WSS session already active");
                     continue;
                 }
-                let Some((tls, origins)) = &browser_tls else {
+                let Some(browser_tls) = &browser_tls else {
                     eprintln!("Firmica: WSS requires TLS configuration");
                     continue;
                 };
@@ -136,15 +139,18 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                     eprintln!("Firmica: unsupported WSS bootstrap");
                     continue;
                 };
-                let Some(origins) = origins.snapshot().await else {
-                    eprintln!("Firmica: cannot read authorized browser origins");
-                    continue;
+                let (tls, origins) = match browser_tls.snapshot().await {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        eprintln!("Firmica: {error}");
+                        continue;
+                    }
                 };
                 if origins.is_empty() {
                     eprintln!("Firmica: no browser origins authorized");
                     continue;
                 }
-                let server = match Server::bind_origins(bootstrap, tls.clone(), origins).await {
+                let server = match Server::bind_origins(bootstrap, tls, origins).await {
                     Ok(server) => server,
                     Err(_) => {
                         eprintln!("Firmica: cannot bind WSS listener");
@@ -166,6 +172,7 @@ pub fn launch(app: fn() -> Element) -> Result<(), String> {
                 .sender
                 .try_send(IncomingReview {
                     request,
+                    browser_origin: None,
                     reply: None,
                 })
                 .is_err()
@@ -206,6 +213,7 @@ async fn forward_review(mut pending: PendingRequest, inbox: Inbox) {
         .sender
         .try_send(IncomingReview {
             request: pending.request,
+            browser_origin: Some(pending.browser_origin),
             reply: Some(reply),
         })
         .is_err()
@@ -287,6 +295,7 @@ mod tests {
         (
             PendingRequest {
                 request: ProtocolRequest::parse("afirma://sign?ver=4&dat=private").unwrap(),
+                browser_origin: "https://signing.example.invalid".into(),
                 reply,
             },
             response,
@@ -299,6 +308,10 @@ mod tests {
         let (pending, response) = pending();
         let task = tokio::spawn(forward_review(pending, inbox.clone()));
         let incoming = inbox.receiver.recv().await.unwrap();
+        assert_eq!(
+            incoming.browser_origin.as_deref(),
+            Some("https://signing.example.invalid")
+        );
         let reply = incoming.reply.unwrap();
         assert!(!reply.is_closed());
         drop(response);
@@ -353,6 +366,7 @@ mod tests {
                 .sender
                 .try_send(IncomingReview {
                     request: ProtocolRequest::parse("afirma://save?").unwrap(),
+                    browser_origin: None,
                     reply: None,
                 })
                 .unwrap_or_else(|_| panic!("test inbox filled too early"));

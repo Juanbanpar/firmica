@@ -140,6 +140,28 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
       await click('#sign-cancel');
       await until(async () => (await status()) === 'Operation cancelled.');
       await until(async () => (await workers()).length === 0);
+      assert.equal(await evaluate('document.querySelector("#sign-document-selected").textContent'), 'document.bin');
+      assert.equal(await evaluate('document.querySelector("#sign-certificate-selected").textContent'), 'rsa.p12');
+      assert.equal(await evaluate('document.querySelector("#sign-password").value'), '');
+      assert.deepEqual(await readdir(output), []);
+      await input('#sign-password', password);
+      await click('#sign-prepare');
+      await until(async () => await evaluate('!!document.querySelector("#sign-subject")'));
+      const [stoppedWorker] = await workers();
+      assert.ok(stoppedWorker);
+      // Keep the real worker busy until the user cancels the in-flight signing.
+      process.kill(Number(stoppedWorker), 'SIGSTOP');
+      try {
+        await click('#sign-acknowledge');
+        await dialog('#sign-save', path.join(output, 'cancelled.csig'));
+        await until(async () => await evaluate('!!document.querySelector("#sign-stop")'));
+        await click('#sign-stop');
+        await until(async () => (await status()) === 'Cancelling…');
+      } finally {
+        if ((await workers()).includes(stoppedWorker)) process.kill(Number(stoppedWorker), 'SIGCONT');
+      }
+      await until(async () => (await status()) === 'Operation cancelled.');
+      assert.equal((await workers()).length, 0);
       assert.deepEqual(await readdir(output), []);
       for (const [algorithm, attached] of [['rsa', false], ['ec', true]]) {
         await select(algorithm, attached);
@@ -148,6 +170,7 @@ test('Linux standalone signing: native selection, consent, frozen content, save/
         await click('#sign-acknowledge');
         await dialog('#sign-save', null);
         assert.equal(await evaluate('!!document.querySelector("#sign-subject")'), true, 'save cancellation preserves pending review');
+        assert.equal(await evaluate('document.querySelector("#sign-acknowledge").checked'), true);
         assert.deepEqual(await readdir(output), algorithm === 'rsa' ? [] : ['rsa.csig']);
         await dialog('#sign-save', path.join(output, `${algorithm}.csig`));
         await until(async () => (await status()) === 'Signature saved.');

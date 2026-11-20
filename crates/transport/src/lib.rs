@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite;
 
 pub use server::Server;
 pub use tls::{load_tls, validate_origin};
+pub use tokio_rustls::rustls::ServerConfig;
 pub use wire::ProtocolError;
 
 /// Application outcome for one authenticated request.
@@ -34,6 +35,9 @@ pub enum Decision {
 /// A bounded handoff to the application. Dropping the reply cancels the request.
 pub struct PendingRequest {
     pub request: ProtocolRequest,
+    /// Exact allowed Origin header of the connection carrying this authenticated
+    /// request. This identifies a browser origin, not the remote operator.
+    pub browser_origin: String,
     pub reply: oneshot::Sender<Decision>,
 }
 

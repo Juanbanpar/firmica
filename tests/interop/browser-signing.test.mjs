@@ -90,14 +90,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       if (managed) {
         const options = {env:{...process.env,XDG_CONFIG_HOME:config},encoding:'utf8',stdio:['ignore','pipe','pipe']};
         tlsCommand = (...args) => execFileSync(binary,['tls',...args],options);
-        const output = tlsCommand('init','--origin','https://initial.invalid');
-        assert.equal(tlsCommand('status'),output);
-        const fingerprint = openssl(['x509','-in',path.join(config,'firmica/browser-tls/ca.pem'),'-noout','-sha256','-fingerprint']).toString().trim().split('=').at(-1);
-        assert.ok(output.includes(`CA SHA-256: ${fingerprint}`));
       }
-      execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
-      execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Synthetic local WSS','-t','C,,','-i',
-        managed ? path.join(config,'firmica/browser-tls/ca.pem') : path.join(dir,'ca.pem')]);
       const flags = managed ? [] : ['--tls-cert',path.join(dir,'tls.pem'),'--tls-key',path.join(dir,'tls.key'),'--origin',origin];
       const quote = value => `"${value.replaceAll('\\','\\\\').replaceAll('"','\\"').replaceAll('%','%%')}"`;
       const entry = managed && process.env.FIRMICA_DEB
@@ -119,18 +112,50 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       {env,cwd:dir,stdio:['ignore','ignore','pipe'],detached:true});
       child.stderr.on('data', bytes => {stderr += bytes;});
       native = await inspector(port);
+      const click = selector => native.evaluate(`setTimeout(() => document.querySelector(${JSON.stringify(selector)}).click(), 0); true`);
+      const ca = managed ? path.join(config,'firmica/browser-tls/ca.pem') : path.join(dir,'ca.pem');
       if (managed) {
-        // Update the authorization list while the desktop process is already running.
-        tlsCommand('origins','add',origin);
-        assert.ok(tlsCommand('origins','list').includes(`Origin: ${origin}\n`));
+        await until(async () => await native.evaluate('!!document.querySelector(\'a[href="/browser"]\')'));
+        await click('a[href="/browser"]');
+        const submitOrigin = async value => {
+          await until(async () => await native.evaluate('document.querySelector("#browser-tls-origin")?.disabled === false'));
+          await native.evaluate(`(() => {
+            const input = document.querySelector('#browser-tls-origin');
+            input.value = ${JSON.stringify(value)};
+            input.dispatchEvent(new Event('input', {bubbles:true}));
+            return true;
+          })()`);
+          await until(async () => await native.evaluate('document.querySelector("#browser-tls-apply")?.disabled === false'));
+          await click('#browser-tls-apply');
+        };
+        await submitOrigin('https://*.invalid');
+        await until(async () => await native.evaluate('!!document.querySelector("#browser-tls-error")'));
+        assert.throws(() => tlsCommand('status'));
+        const initialOrigin = 'https://initial.invalid';
+        await submitOrigin(initialOrigin);
+        await until(async () => await native.evaluate('!!document.querySelector("#browser-tls-fingerprint")'));
+        const fingerprint = openssl(['x509','-in',ca,'-noout','-sha256','-fingerprint']).toString().trim().split('=').at(-1);
+        assert.ok(tlsCommand('status').includes(`CA SHA-256: ${fingerprint}`));
+        assert.equal(await native.evaluate('document.querySelector("#browser-tls-ca").textContent'),ca);
+        assert.equal(await native.evaluate('document.querySelector("#browser-tls-fingerprint").textContent'),fingerprint);
+        assert.ok(await native.evaluate('document.querySelector("#browser-tls-expires").textContent'));
+        assert.equal(await native.evaluate('document.body.textContent.includes("private-key.pem")'),false);
+        await submitOrigin(origin);
+        await until(async () => (await native.evaluate('document.querySelector("#browser-tls-origins").textContent')).includes(origin));
+        await click(`button[aria-label="Revocar ${initialOrigin}"]`);
+        await until(async () => !(await native.evaluate('document.querySelector("#browser-tls-origins").textContent')).includes(initialOrigin));
+        assert.equal(tlsCommand('origins','list'),`Origin: ${origin}\n`);
+        await click('a[href="/"]');
+        await until(async () => await native.evaluate('!!document.querySelector("#review-status")'));
       }
+      execFileSync('certutil',['-N','-d',`sql:${profile}`,'--empty-password']);
+      execFileSync('certutil',['-A','-d',`sql:${profile}`,'-n','Synthetic local WSS','-t','C,,','-i',ca]);
       const [display,authority,busAddress,appPid] = (await readFile(path.join(dir,'display'),'utf8')).split('\n');
       xenv = {...env,DISPLAY:display,XAUTHORITY:authority,DBUS_SESSION_BUS_ADDRESS:busAddress};
       const xdo = args => execFileSync('xdotool',args,{env:xenv,encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();
       // The WebView can be ready before the independently started window manager.
       await until(() => execFileSync('xprop', ['-root', '_NET_SUPPORTED'],
         {env:xenv, timeout:5000, encoding:'utf8'}).includes('_NET_ACTIVE_WINDOW'));
-      const click = selector => native.evaluate(`setTimeout(() => document.querySelector(${JSON.stringify(selector)}).click(), 0); true`);
       const workers = async () => {
         const tasks = await readdir(`/proc/${appPid}/task`);
         const children = await Promise.all(tasks.map(task => readFile(`/proc/${appPid}/task/${task}/children`,'utf8').catch(() => '')));
@@ -163,6 +188,8 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       }
       await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
       assert.equal(await native.evaluate('document.querySelector("#request-version").textContent'),'4.1');
+      assert.equal(await native.evaluate('document.querySelector("#request-origin").textContent'),origin);
+      assert.equal(await native.evaluate('document.querySelector("#request-document-size").textContent'),`${content.length} bytes`);
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'supported request must open the signing form');
       await click('#sign-language');
       assert.equal(await native.evaluate('!!document.querySelector("#sign-document")'),false,'browser cannot choose a local document');
