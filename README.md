@@ -209,7 +209,12 @@ FIRMICA_TEST_APP=target/dx/mobile/debug/ios/Mobile.app cargo test --locked -p xt
 
 The Rust iOS test runs the native Swift XCTest scenario in a temporary iPhone simulator and opens synthetic links from Safari. It saves XCTest results and screenshots under `.test-artifacts/ios/` and deletes the simulator when finished.
 
-Dependencies use upstream crates without local patches. The transitive GTK dependencies include accepted unsoundness advisories for [GLib (RUSTSEC-2024-0429)](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) and [rand (RUSTSEC-2026-0097)](https://rustsec.org/advisories/RUSTSEC-2026-0097.html). Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI accepts these two advisories with explicit `--ignore` arguments; other vulnerabilities and unsoundness findings still fail.
+Dependencies use upstream crates without local patches. Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI explicitly accepts two unsoundness advisories and fails on other vulnerabilities and unsoundness findings.
+
+- Dioxus Desktop's Linux GTK 3 stack, including GTK and WebKitGTK, requires GLib 0.18. [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) is fixed in GLib 0.20 and later.
+- Wry's Android HTML parser, `kuchikiki`, pulls in `rand 0.7` through the `selectors` build dependency on `phf_codegen` and `phf_generator`. [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html) has a fix starting at 0.8.6, outside the generator's 0.7 requirement.
+
+The current Dioxus 0.7 dependency requirements prevent a lockfile-only fix for either advisory. Recheck the paths with `cargo tree --locked --workspace --target all -i glib@0.18.5` and the same command with `-i rand@0.7.3` when updating dependencies.
 
 Domain logic, protocol, transport, signing, build tooling and OS invocation checks use Cargo tests. JavaScript is limited to browser/WebView automation with Playwright and the upstream AutoScript fixture. Python is limited to Windows GUI automation with Playwright/pywinauto. Swift XCTest exercises native macOS controls and dialogs, and Safari and native dialogs on iOS. These end-to-end checks complement the Rust tests.
 
@@ -244,3 +249,18 @@ The manually dispatched **Windows bundle QA** workflow can replay standard-accou
 The Windows format test also exercises Firefox with unmodified pinned AutoScript (protocol 4) and explicit protocol 4.1 requests for every format and algorithm. It requires an account with no existing `afirma` association or Firmica configuration. It uses the bundled registration script, packaged TLS provisioning, a private Firefox copy/profile trusting the generated CA, and real native consent. A separate fresh Firefox profile must reject that CA. The suite checks cold launch, warm delivery, pending-review protection, cancellation and worker failure, plus protocol 4.1 result replay rejection. One pair of requests waits for an actual listener expiry and reuses the existing application; the remaining cases cold-launch through the registered handler. Cleanup removes only the generated TLS profile and registration. Protected Windows defaults and OS trust are preserved.
 
 For native macOS acceptance tests, install `nss`, `poppler` and `xmlsec1` through Homebrew, then run `npm ci` and `npx playwright install firefox`. On a disposable macOS desktop account, set `FIRMICA_TEST_APP` to the absolute extracted `.app` path and run `cargo test --locked -p xtask --test macos -- --ignored --nocapture --test-threads=1`. Xcode and a graphical session are required. Rust generates synthetic fixtures and verifies signatures; XCTest exercises actual application controls and native dialogs; Playwright drives Firefox with unmodified pinned AutoScript (protocol 4) and explicit protocol 4.1 requests. Both protocols exercise RSA/P-256 CAdES, visible PAdES and every XAdES placement, plus cancellation, worker failure, disconnection and pending-review protection. The test refuses another application's `afirma` handler or an existing Firmica configuration, uses temporary profile-scoped browser trust, and removes its configuration and registration. Screenshots, XCTest results and sanitized diagnostics are retained under `.test-artifacts/macos/`. The **macOS desktop** workflow runs these checks against relocated bundles on Apple Silicon and Intel.
+
+### CI baseline
+
+Record the commit SHA, run URLs and attempt numbers when comparing baselines. Check **CI**, **macOS desktop** on Apple Silicon and Intel, and **iOS invocation** on that revision. If the iOS path filter skips the revision, dispatch the workflow from a branch pointing to that commit. For a cancelled job, inspect its check annotations and step list. A runner-acquisition error before any steps start has no test logs or artifacts. Retry that job on the same SHA with `gh run rerun RUN_ID --job JOB_ID`. If a step fails after a runner starts, inspect its logs and the run's test artifacts.
+
+The Linux job retains Debian payload, Firefox OS-handler and lifecycle evidence in `linux-invocation`, and protocol 4.1 results in `protocol41-browsers`. The Firefox OS-handler and native protocol 4.1 tests put results from the extracted Debian package in a `debian/` subdirectory so both runs' evidence is available.
+
+For a ruleset targeting `main`, require a pull request and select GitHub Actions as the expected source of these minimum status checks.
+
+- `audit` and `linux-invocation`
+- `signing (ubuntu-latest)`, `signing (macos-latest)` and `signing (windows-latest)`
+- `rust (ubuntu-latest)`, `rust (macos-latest)` and `rust (windows-latest)`
+- `native (macos-15)` and `native (macos-15-intel)`
+
+Review iOS results when its workflow runs and use **Windows bundle QA** for manual replay. The iOS workflow is path-filtered, so requiring its check for every PR would leave unrelated changes waiting for a check GitHub never starts. [GitHub required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)

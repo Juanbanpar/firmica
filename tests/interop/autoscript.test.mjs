@@ -25,7 +25,7 @@ function waitReady(child) {
 
 const osHandlerMode = process.env.FIRMICA_OS_HANDLER === '1';
 const nativeMode = osHandlerMode || process.env.FIRMICA_NATIVE_INTEROP === '1';
-const osArtifacts = path.join(artifact,'linux-os-handler');
+const osArtifacts = path.join(artifact,'linux-os-handler',process.env.FIRMICA_DEB ? 'debian' : '');
 test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → ' : ''}TLS WebSocket → ${nativeMode ? 'Dioxus review' : 'headless peer'} → async polling → cancellation`, { timeout: 60000 }, async () => {
   const script = await autoscript();
   const dir = await mkdtemp(path.join(tmpdir(), 'firmica-interop-'));
