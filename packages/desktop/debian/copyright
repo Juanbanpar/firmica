@@ -1,0 +1,7 @@
+Upstream-Name: Firmica
+Source: https://github.com/Juanbanpar/firmica
+
+Firmica's original code is copyright by the Firmica contributors. It is
+distributed under the GNU General Public License, version 3 or any later
+version. On Debian systems, the GPL version 3 is available in
+/usr/share/common-licenses/GPL-3.

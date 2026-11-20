@@ -4,6 +4,7 @@ name = "Firmica"
 [bundle]
 identifier = "org.firmica.client"
 publisher = "Firmica contributors"
+icon = ["assets/firmica.png"]
 external_bin = ["../../target/sidecars/firmica-key-worker"]
 
 [deep_links]
@@ -11,3 +12,7 @@ schemes = ["afirma"]
 
 [bundle.deb]
 desktop_template = "assets/firmica.desktop.hbs"
+recommends = ["xdg-desktop-portal", "zenity"]
+
+[bundle.deb.files]
+"/usr/share/doc/firmica/copyright" = "debian/copyright"

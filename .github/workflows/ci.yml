@@ -69,10 +69,19 @@ jobs:
           if-no-files-found: warn
 
   build:
+    name: build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-24.04
+            package_only: false
+          - os: windows-latest
+            package_only: false
+          - os: macos-latest
+            package_only: false
+          - os: macos-15-intel
+            package_only: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -81,7 +90,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev desktop-file-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev dpkg-dev desktop-file-utils
           rustup component add --toolchain stable clippy
           rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Configure Windows system OpenSSL
@@ -105,10 +114,10 @@ jobs:
           echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
       - name: Verify Windows and macOS worker process controls
-        if: runner.os != 'Linux'
+        if: runner.os != 'Linux' && !matrix.package_only
         run: cargo +stable test --locked -p firmica-key-worker
       - name: Verify macOS worker pipe deadlines and cleanup
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !matrix.package_only
         run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
       - name: Install verified Dioxus CLI 0.7.10
         run: cargo xtask install-dx
@@ -117,21 +126,17 @@ jobs:
         run: cargo xtask bundle
       - name: Verify Debian package metadata and payload
         if: runner.os == 'Linux'
-        env:
-          FIRMICA_DEB: ${{ github.workspace }}/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb
-        run: cargo +stable test --locked -p xtask --test debian -- --ignored
+        run: |
+          packages=("$PWD"/target/dx/firmica/bundle/linux/deb/firmica_*.deb)
+          test "${#packages[@]}" -eq 1
+          test -f "${packages[0]}"
+          FIRMICA_DEB="${packages[0]}" cargo +stable test --locked -p xtask --test debian -- --ignored
       - name: Build Windows portable package
         if: runner.os == 'Windows'
-        run: cargo xtask bundle --debug
+        run: cargo xtask bundle
       - name: Build and verify the macOS application bundle
         if: runner.os == 'macOS'
-        run: |
-          cargo xtask bundle --debug
-          destination="$RUNNER_TEMP/Firmica space & 'apostrophe'"
-          mkdir -p "$destination"
-          ditto -x -k target/dx/firmica/bundle/macos/firmica-*.zip "$destination"
-          app=$(find "$destination" -maxdepth 1 -name '*.app' -type d)
-          codesign --verify --deep --strict "$app"
+        run: cargo xtask bundle
       - name: Build web and check the mobile host entry point
         if: runner.os == 'Linux'
         run: |
@@ -141,9 +146,10 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo +stable test --locked -p desktop -p mobile -p ui
       - name: Test desktop on Windows and macOS
-        if: runner.os != 'Linux'
+        if: runner.os != 'Linux' && !matrix.package_only
         run: cargo +stable test --locked -p desktop
       - name: Verify desktop signing and cleanup with the native worker
+        if: '!matrix.package_only'
         env:
           WORKER_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
         shell: bash

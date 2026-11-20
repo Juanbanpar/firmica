@@ -3,6 +3,9 @@ name = "desktop"
 version = "0.1.0"
 edition = "2021"
 description = "Firmica electronic-signature client"
+authors = ["Firmica contributors"]
+homepage = "https://github.com/Juanbanpar/firmica"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "firmica"
