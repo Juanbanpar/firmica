@@ -44,7 +44,8 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
     AutoScript.enableProgressDialog(false);
     AutoScript.setPortRange(49152, 49154);
     AutoScript.cargarAppAfirma();
-    document.querySelector('#sign').onclick = () => AutoScript.sign('c3ludGhldGljIHRlc3QgZG9jdW1lbnQ=', 'SHA256withRSA', 'CAdES', 'mode=explicit',
+    AutoScript.setKeyStore(AutoScript.KEYSTORE_PKCS12);
+    document.querySelector('#sign').onclick = () => AutoScript.sign('c3ludGhldGljIHRlc3QgZG9jdW1lbnQ=', 'SHA256withRSA', 'CAdES', ${JSON.stringify('# Detached signature\nmode : explicit')},
       () => { window.operationResult = { unexpectedSuccess: true }; },
       (type, message, code) => { window.operationResult = { type, message, code }; document.querySelector('#result').textContent = type; });
     </script></html>`;
@@ -160,19 +161,20 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
     }
     if (nativeMode) {
       await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
-      assert.equal(await native.evaluate('document.querySelector("#request-version")?.textContent'),'4');
+      assert.equal(await native.evaluate('document.querySelector("#request-version")?.textContent'),'4.1');
       await until(() => frames.some(f => f.direction === 'sent' && f.data.startsWith('getresult?')));
       await native.evaluate('document.querySelector("#reject-request").click(); true');
     }
     await page.waitForFunction(() => window.operationResult, { timeout: 20000 });
     const result = await page.evaluate(() => window.operationResult);
     assert.equal(result.type, 'es.gob.afirma.core.AOCancelledOperationException');
+    assert.equal(result.code, 'AF500001');
     assert.ok(frames.some(f => f.direction === 'sent' && f.data.startsWith('echo=-idsession=')));
     assert.ok(frames.some(f => f.direction === 'received' && f.data === 'OK'));
     assert.ok(frames.some(f => f.direction === 'sent' && f.data.startsWith('afirma://sign?')));
     assert.ok(frames.some(f => f.direction === 'received' && f.data === '#wait'));
     assert.ok(frames.some(f => f.direction === 'sent' && f.data.startsWith('getresult?')));
-    assert.ok(frames.some(f => f.direction === 'received' && f.data === 'CANCEL'));
+    assert.ok(frames.some(f => f.direction === 'received' && f.data === 'err-11:=AF500001 - Operation cancelled by user'));
     const endpoint = frames.find(f => f.direction === 'received' && f.data === 'OK').url;
     const session = new URL(bootstrapUri).searchParams.get('idsession');
     const exchange = message => page.evaluate(({endpoint,message}) => new Promise((resolve,reject) => {
@@ -183,9 +185,9 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
       ws.onerror = () => { clearTimeout(timer); reject(new Error('WebSocket failed')); };
     }),{endpoint,message});
     assert.equal(await exchange(`echo=-idsession=${session}@EOF`),'OK','reconnect retains session');
-    assert.match(await exchange('getresult?idsession=invalidsession123'),/^SAF_46:/);
-    assert.match(await exchange(`afirma://sign?idsession=${session}`),/^SAF_04:/,'completed session cannot sign twice');
-    assert.match(await exchange(`getresult?idsession=${session}&idsession=${session}`),/^SAF_46:/,'duplicate session fields are rejected');
+    assert.match(await exchange('getresult?idsession=invalidsession123'),/^err-00:=AF620010 - /);
+    assert.match(await exchange(`afirma://sign?idsession=${session}`),/^err-00:=AF600002 - /,'completed session cannot sign twice');
+    assert.match(await exchange(`getresult?idsession=${session}&idsession=${session}`),/^err-00:=AF620010 - /,'duplicate session fields are rejected');
     const port = Number(new URL(endpoint).port);
     const ca = await readFile(trust);
     const handshake = (requestedOrigin,host) => new Promise((resolve,reject) => {
@@ -229,14 +231,14 @@ test(`unmodified AutoScript: URI → ${osHandlerMode ? 'Firefox OS handler → '
       // The original inspector session still works: the app process was not replaced.
       assert.equal(await native.evaluate('document.querySelector("#request-version")?.textContent'),'4');
     }
-    const report = { autoscript: '1.10.1', revision, protocol: 4, jvc: 4, callback: result.type,
+    const report = { autoscript: '1.10.1', revision, advertisedProtocol: '4', protocol: '4.1', jvc: 4, callback: result.type,
       browser: osHandlerMode ? browser.browser().version() : browser.version(), frameCount: frames.length,
       invocation: osHandlerMode ? 'Firefox → isolated XDG handler, cold/warm' : 'captured URI → test bridge' };
     if (osHandlerMode) {
       const executable = (await readFile(`/proc/${osAppPid}/cmdline`,'utf8')).split('\0')[0];
       Object.assign(report, {platform:process.platform, applicationSha256:createHash('sha256').update(await readFile(executable)).digest('hex'),
         tls:'Firmica-generated per-user profile; CA trusted only in a disposable Firefox profile; fresh profile rejects it',
-        scope:'protocol 4 cancellation and direct warm URI with automatic TLS profile loading; scheme preapproved; default permission UX and system trust installation unverified'});
+        scope:'protocol 4.1 cancellation and direct warm URI with automatic TLS profile loading; scheme preapproved; default permission UX and system trust installation unverified'});
       await page.screenshot({path:path.join(osArtifacts,'browser-cancelled.png')});
       if(process.env.FIRMICA_SCREENSHOT) {
         const window = execFileSync('xdotool',['search','--onlyvisible','--name','^Firmica'],{encoding:'utf8'}).trim().split('\n')[0];

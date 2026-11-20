@@ -66,8 +66,9 @@ async function lifetime(asynchronous) {
     }
     await connect();
     const submitted = performance.now();
-    await page.evaluate(({session,asynchronous}) => window.reviewSocket.send(`afirma://sign?idsession=${session}&dat=c3ludGhldGlj${asynchronous ? '&format=CAdES&algorithm=SHA256withRSA' : ''}`),{session,asynchronous});
-    await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
+    const operation = asynchronous ? 'sign' : 'cosign';
+    await page.evaluate(({session,operation}) => window.reviewSocket.send(`afirma://${operation}?idsession=${session}&dat=c3ludGhldGlj&format=CAdES&algorithm=SHA256withRSA`),{session,operation});
+    await until(async () => (await native.evaluate('document.querySelector("#request-operation")?.textContent')) === operation);
     if(asynchronous) {
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'asynchronous review must use the signing form');
       await page.waitForFunction(() => window.replies.includes('#wait'));
@@ -99,7 +100,7 @@ async function lifetime(asynchronous) {
     await native.evaluate('document.querySelector("#acknowledge-request").click(); true');
     await until(async () => (await native.evaluate('document.querySelector("#review-status")?.textContent'))?.includes(asynchronous ? 'no está implementada' : 'not implemented'));
     const report = {mode:asynchronous ? 'async listener expiry' : 'synchronous review timeout',
-      protocol:4,jvc:asynchronous ? 4 : 3,request:'sign',certificateBackend:null,
+      protocol:asynchronous ? '4.1' : '4',jvc:asynchronous ? 4 : 3,request:operation,certificateBackend:null,
       platform:process.platform,browser:browser.version(),elapsedSeconds:elapsed,
       applicationSha256:createHash('sha256').update(await readFile(binary)).digest('hex'),
       expected:'expired review clears controls and accepts a new local invocation',actual:'passed',

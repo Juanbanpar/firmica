@@ -24,7 +24,14 @@ fn decodes_format_specific_placement_and_pdf_appearance_without_ignoring_options
             .insert("properties".into(), URL_SAFE.encode(property));
         assert_eq!(SignRequest::decode(&request).unwrap().format(), &expected);
     }
-    let properties="signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Reviewed label";
+    let properties = concat!(
+        "! Visible signature\r\nsignaturePage : 1\r\n",
+        "signaturePositionOnPageLowerLeftX=40\r",
+        "signaturePositionOnPageLowerLeftY\t30\n",
+        "signaturePositionOnPageUpperRightX=400\n",
+        "signaturePositionOnPageUpperRightY=70\n",
+        "layer2Text= Reviewed label  "
+    );
     let mut req = request("");
     req.parameters.insert("format".into(), "PAdES".into());
     req.parameters
@@ -35,7 +42,7 @@ fn decodes_format_specific_placement_and_pdf_appearance_without_ignoring_options
             appearance: Some(Appearance {
                 page: 1,
                 rectangle: [40., 30., 400., 70.],
-                text: "Reviewed label".into()
+                text: "Reviewed label  ".into()
             })
         })
     );
@@ -67,6 +74,10 @@ fn decodes_binary_data_and_fixed_choices() {
     for (properties, expected) in [
         ("", ContentMode::Detached),
         ("mode=explicit", ContentMode::Detached),
+        (
+            " # integration defaults\r\n  mode : explicit",
+            ContentMode::Detached,
+        ),
         ("mode=implicit", ContentMode::Attached),
     ] {
         let parsed = SignRequest::decode(&request(&format!(
@@ -104,7 +115,8 @@ fn refuses_unimplemented_semantics_and_malformed_data() {
         "mode=explicit\npolicyIdentifier=1.2.3",
         "precalculatedHashAlgorithm=SHA-256",
         "mode=other",
-        "mode:explicit",
+        "mode=explicit\nmode : implicit",
+        "=explicit",
         "mode=explicit\\",
         "mode=explicit\0",
     ] {
@@ -131,6 +143,33 @@ fn refuses_unimplemented_semantics_and_malformed_data() {
     parsed = request("");
     parsed.version.major = 3;
     assert!(SignRequest::decode(&parsed).is_err());
+}
+
+#[test]
+fn distinguishes_malformed_sign_requests_from_unsupported_options() {
+    for extra in [
+        "&op=cosign",
+        "&sticky=maybe",
+        "&resetsticky=",
+        "&properties=%25",
+    ] {
+        assert_eq!(
+            SignRequest::decode(&request(extra)).err(),
+            Some(RequestError::Invalid)
+        );
+    }
+    for field in ["format", "algorithm", "dat"] {
+        let mut request = request("");
+        request.parameters.remove(field);
+        assert_eq!(
+            SignRequest::decode(&request).err(),
+            Some(RequestError::Invalid)
+        );
+    }
+    assert_eq!(
+        SignRequest::decode(&request("&sticky=true")).err(),
+        Some(RequestError::Unsupported)
+    );
 }
 #[test]
 fn response_is_url_safe_and_redacted() {

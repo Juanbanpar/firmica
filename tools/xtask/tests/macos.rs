@@ -323,17 +323,19 @@ fn extracted_bundle_signs_local_documents_and_browser_requests() {
                         result["type"],
                         "es.gob.afirma.core.AOCancelledOperationException"
                     );
+                    assert_eq!(result["code"], "AF500001");
                 }
             }
             "worker-failure" => {
                 assert!(result["signature"].is_null());
-                assert!(result["code"].as_str().unwrap().starts_with(
+                assert_eq!(
+                    result["code"],
                     if case["protocol"] == "4.1" {
-                        "err-00:=AF200115 - "
+                        "err-00:=AF200115 - Signing failed"
                     } else {
-                        "SAF_09:"
+                        "AF200115"
                     }
-                ));
+                );
             }
             "disconnect" => assert_eq!(result["disconnected"], true),
             _ => unreachable!(),

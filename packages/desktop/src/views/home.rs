@@ -28,6 +28,7 @@ pub struct BrowserOperation {
 pub fn Home() -> Element {
     use firmica_core::{Inbox, ReviewOutcome};
     use firmica_protocol::signing::{RequestError, SignRequest};
+    use firmica_protocol::Operation;
     let incoming = use_context::<Inbox>();
     // The generic review retains unsupported/direct URI behavior. Only a live
     // transport reply can receive signing output; a bare URI never supplies one.
@@ -65,6 +66,12 @@ pub fn Home() -> Element {
                         }
                         Err(RequestError::Invalid) => {
                             let _ = reply.try_send(ReviewOutcome::InvalidParameters);
+                            continue;
+                        }
+                        Err(RequestError::Unsupported)
+                            if incoming.request.operation == Operation::Sign =>
+                        {
+                            let _ = reply.try_send(ReviewOutcome::Unsupported);
                             continue;
                         }
                         Err(RequestError::Unsupported) => {}

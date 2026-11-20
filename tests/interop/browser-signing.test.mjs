@@ -17,7 +17,7 @@ const password = 'synthetic-browser-password';
 const smallContent = Buffer.from('Browser signing\x00\xff\r\n', 'latin1');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'managed-tls', ...['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount'].map(name => `protocol41-${name}`)]) {
+for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount', 'large-detached', 'large-attached', 'oversize-document', 'unsupported-option', 'managed-tls', ...['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped', 'xades-enveloping', 'xades-detached', 'worker-failure', 'unmount'].map(name => `protocol41-${name}`)]) {
   test(`Firefox ${scenario.startsWith('protocol41-') ? 'protocol 4.1' : 'AutoScript'} signing: ${scenario}`, {skip:process.platform !== 'linux', timeout:90000}, async () => {
     const protocol41 = scenario.startsWith('protocol41-');
     const operation = protocol41 ? scenario.slice('protocol41-'.length) : scenario;
@@ -31,7 +31,9 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       : operation === 'xades-detached' ? 'XAdES Detached' : 'XAdES Enveloping';
     const format = pdf ? 'PAdES' : xml ? 'XAdES' : 'CAdES';
     const properties = pdf ? (ec ? 'signaturePage=1\nsignaturePositionOnPageLowerLeftX=40\nsignaturePositionOnPageLowerLeftY=30\nsignaturePositionOnPageUpperRightX=400\nsignaturePositionOnPageUpperRightY=70\nlayer2Text=Browser appearance' : '')
-      : xml ? `format=${placement}` : `mode=${ec || operation === 'large-attached' ? 'implicit' : 'explicit'}`;
+      : xml ? `format=${placement}`
+      : operation === 'unsupported-option' ? 'mode=explicit\npolicyIdentifier=1.2.3'
+      : `mode=${ec || operation === 'large-attached' ? 'implicit' : 'explicit'}`;
     const managed = operation === 'managed-tls';
     const attached = ec || operation === 'large-attached';
     const content = pdf ? await readFile(path.join(root,'crates/pades/tests/fixtures/document.pdf'))
@@ -149,18 +151,18 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       });
       await page.goto(origin);
       await page.locator('#sign').click();
-      if (operation === 'oversize-document') {
+      if (operation === 'oversize-document' || operation === 'unsupported-option') {
         await page.waitForFunction(() => window.result, undefined, {timeout:20000});
         const result = await page.evaluate('window.result');
         assert.equal(result.type,'java.lang.Exception');
-        assert.match(result.code,/^SAF_03:/);
+        assert.equal(result.code,operation === 'oversize-document' ? 'AF620016' : 'AF600002');
         assert.equal(result.signature,undefined);
-        assert.equal((await workers()).length,0,'oversized input must not open a key');
-        assert.equal(await native.evaluate('!!document.querySelector("#sign-certificate")'),false);
+        assert.equal((await workers()).length,0,'rejected input must not open a key');
+        assert.equal(await native.evaluate('!!document.querySelector("#request-operation")'),false);
         return;
       }
       await until(async () => await native.evaluate('document.querySelector("#request-operation")?.textContent === "sign"'));
-      assert.equal(await native.evaluate('document.querySelector("#request-version").textContent'),protocol41 ? '4.1' : '4');
+      assert.equal(await native.evaluate('document.querySelector("#request-version").textContent'),'4.1');
       assert.equal(await native.evaluate('!!document.querySelector("#sign-language")'),true,'supported request must open the signing form');
       await click('#sign-language');
       assert.equal(await native.evaluate('!!document.querySelector("#sign-document")'),false,'browser cannot choose a local document');
@@ -223,11 +225,14 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
       await until(async () => (await workers()).length === 0);
       if (operation === 'worker-failure') {
         assert.equal(result.type, protocol41 ? undefined : 'java.lang.Exception');
-        assert.match(result.code, protocol41 ? /^err-00:=AF200115 - / : /^SAF_09:/);
+        assert.equal(result.code, protocol41 ? 'err-00:=AF200115 - Signing failed' : 'AF200115');
         assert.equal(result.signature,undefined);
       } else if (operation === 'unmount') {
         if (protocol41) assert.match(result.code, /^err-11:=AF500001 - /);
-        else assert.equal(result.type,'es.gob.afirma.core.AOCancelledOperationException');
+        else {
+          assert.equal(result.type,'es.gob.afirma.core.AOCancelledOperationException');
+          assert.equal(result.code,'AF500001');
+        }
         assert.equal(result.signature,undefined);
       } else {
         assert.equal(result.type,undefined);
@@ -266,7 +271,7 @@ for (const scenario of ['rsa', 'ec', 'pades-rsa', 'pades-ec', 'xades-enveloped',
         const ws = new WebSocket(endpoint); const timer = setTimeout(() => {ws.close();reject(new Error('replay timeout'));},5000);
         ws.onopen = () => ws.send(session); ws.onmessage = event => {clearTimeout(timer);ws.close();resolve(event.data);};
       }),{endpoint,session});
-      assert.match(replay, protocol41 ? /^err-00:=AF600002 - / : /^SAF_04:/,'a result cannot be retrieved twice');
+      assert.match(replay, /^err-00:=AF600002 - /,'a result cannot be retrieved twice');
       assert(!stderr.includes(password)); assert(!stderr.includes('BEGIN PRIVATE KEY')); assert(!stderr.includes('panicked at'));
       if (protocol41) {
         const evidence = path.join(root,'.test-artifacts/protocol41',process.env.FIRMICA_DEB ? 'debian' : '');
