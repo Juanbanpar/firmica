@@ -225,14 +225,14 @@ CARGO_NET_OFFLINE=true cargo +nightly-2026-11-14 fuzz run --features libfuzzer "
 
 The targets parse in memory without opening keys, spawning workers or opening network connections. Keep generated inputs and sanitizer artifacts in the temporary directory. Add a small, synthetic regression to the corpus when it captures a parser behavior worth preserving. To run all six targets in GitHub Actions, select **Also run bounded parser fuzzing** when dispatching CI manually.
 
-Dependencies use upstream crates without local patches. Run `cargo audit --deny unsound` with `cargo-audit 0.22.2` to see all findings. CI explicitly accepts two unsoundness advisories and fails on other vulnerabilities and unsoundness findings.
+Dependencies use upstream crates and checked-in lockfiles. CI runs `cargo-audit 0.23.0` with unsoundness denied. The main workspace has two explicit exceptions. The fuzz workspace has none. Run `cargo audit --deny unsound` to see the unfiltered workspace findings and `cargo audit --file fuzz/Cargo.lock --deny unsound` to check the fuzz workspace.
 
-- Dioxus Desktop's Linux GTK 3 stack, including GTK and WebKitGTK, requires GLib 0.18. [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) is fixed in GLib 0.20 and later.
-- Wry's Android HTML parser, `kuchikiki`, pulls in `rand 0.7` through the `selectors` build dependency on `phf_codegen` and `phf_generator`. [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html) has a fix starting at 0.8.6, outside the generator's 0.7 requirement.
+- Dioxus Desktop's Linux GTK 3 and WebKitGTK bindings require `glib 0.18`. The affected `VariantStrIter` API remains present in that dependency, and Firmica has no direct calls to it. The fix starts at `glib 0.20`, outside the GTK 3 bindings' requirement. [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)
+- Wry's Android HTML parser, `kuchikiki`, pulls in `rand 0.7.3` through the `selectors` build dependency on `phf_codegen` and `phf_generator`. The generator uses a fixed-seed `SmallRng` for compile-time tables. Its path does not use the affected thread-local RNG. The first patched series starts at `rand 0.8.6`, outside the generator's `0.7` requirement. [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html)
 
-The current Dioxus 0.7 dependency requirements prevent a lockfile-only fix for either advisory. Recheck the paths with `cargo tree --locked --workspace --target all -i glib@0.18.5` and the same command with `-i rand@0.7.3` when updating dependencies.
+The stable Dioxus 0.7 stack has no compatible lockfile-only fix for either advisory. Recheck the exceptions when upgrading Dioxus or Wry. Run `cargo tree --locked --workspace --target all -i glib@0.18.5` and the same command with `-i rand@0.7.3` to verify the dependency paths. [Dioxus releases](https://github.com/DioxusLabs/dioxus/releases)
 
-The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
+The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers and libraries, plus the OpenSSL CLI. Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths. [OpenSSL build requirements](https://docs.rs/openssl/0.10.82/openssl/#building)
 
 ```sh
 cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation
