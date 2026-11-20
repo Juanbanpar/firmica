@@ -26,7 +26,6 @@ rustix = { version = "1", features = ["process", "fs"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
 firmica-key-worker.workspace = true
 firmica-signing.workspace = true
-firmica-cades.workspace = true
 firmica-validation.workspace = true
 secrecy.workspace = true
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }

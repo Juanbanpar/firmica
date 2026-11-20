@@ -1,11 +1,11 @@
 //! Blocking local workflow. All calls that read files, import, sign or close a key
 //! run outside the UI loop. Browser data must first pass operation-specific decoding.
 
-use firmica_cades::MAX_CONTENT_BYTES;
 use firmica_core::signing::{ApprovalError, SigningReview};
 use firmica_key_worker::{WorkerError, WorkerKey};
 use firmica_protocol::signing::SignResponse;
 use firmica_signing::format::Format;
+use firmica_signing::limits::MAX_CONTENT_BYTES;
 use firmica_signing::{
     CertificateIdentity, Signature, SignatureAlgorithm, SigningCapability, SigningError,
     SigningInput, SigningKey,
