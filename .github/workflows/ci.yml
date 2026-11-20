@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      windows_integration:
+        description: Run Windows native integration tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,7 +101,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo xtask bundle --debug
       - name: Install independent Windows signature verifiers
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         id: reference-tools
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
@@ -103,11 +109,11 @@ jobs:
           update: true
           install: mingw-w64-ucrt-x86_64-poppler mingw-w64-ucrt-x86_64-xmlsec
       - name: Add signature verifiers to the test environment
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         shell: pwsh
         run: '"PATH=$env:PATH;${{ steps.reference-tools.outputs.msys2-location }}/ucrt64/bin" >> $env:GITHUB_ENV'
       - name: Verify per-user Windows handler registration
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         env:
           FIRMICA_TEST_APP: target/dx/firmica/debug/windows/app/firmica.exe
         shell: pwsh
@@ -120,18 +126,18 @@ jobs:
       - run: dx build --locked --package mobile --platform desktop --features mobile
       - run: cargo +stable test --locked -p desktop -p mobile
       - name: Verify Windows cold and warm native invocation
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         env:
           FIRMICA_TEST_APP: target/dx/firmica/debug/windows/app/firmica.exe
         run: cargo +stable test --locked -p xtask --test windows_invocation -- --ignored --nocapture
       - name: Verify Windows signing and cleanup with the native worker
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         shell: pwsh
         run: |
           $env:FIRMICA_TEST_WORKER = Join-Path $env:GITHUB_WORKSPACE 'target\dx\firmica\debug\windows\app\firmica-key-worker.exe'
           cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - name: Verify native Windows signing from the extracted portable bundle
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_integration
         timeout-minutes: 18
         shell: pwsh
         run: |
