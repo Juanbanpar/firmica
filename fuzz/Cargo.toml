@@ -1,0 +1,71 @@
+[package]
+name = "firmica-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[features]
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[dependencies]
+base64 = "0.22"
+firmica-protocol = { path = "../crates/protocol" }
+firmica-transport = { path = "../crates/transport", features = ["fuzzing"] }
+firmica-key-worker = { path = "../crates/key-worker", features = ["fuzzing"] }
+firmica-pades = { path = "../crates/pades" }
+firmica-xades = { path = "../crates/xades" }
+libfuzzer-sys = { version = "0.4", optional = true }
+
+[[bin]]
+name = "uri_query"
+path = "fuzz_targets/uri_query.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "signing_properties"
+path = "fuzz_targets/signing_properties.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "websocket"
+path = "fuzz_targets/websocket.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "worker_ipc"
+path = "fuzz_targets/worker_ipc.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "pdf_preflight"
+path = "fuzz_targets/pdf_preflight.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "xml_preflight"
+path = "fuzz_targets/xml_preflight.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]

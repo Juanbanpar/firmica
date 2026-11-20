@@ -19,6 +19,36 @@ pub use tls::{load_tls, validate_origin};
 pub use tokio_rustls::rustls::ServerConfig;
 pub use wire::ProtocolError;
 
+/// In-memory protocol boundary for the repository fuzz targets.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::session::Session;
+    use firmica_protocol::{ProtocolRequest, WebSocketBootstrap};
+    use std::sync::LazyLock;
+
+    /// Exercises control-message authentication and parsing of document-bearing messages.
+    pub fn authenticates_message(message: &str) -> bool {
+        static BOOTSTRAP: LazyLock<WebSocketBootstrap> = LazyLock::new(|| {
+            let request = ProtocolRequest::parse(
+                "afirma://websocket?v=4&jvc=4&ports=49152&idsession=syntheticSession",
+            )
+            .unwrap();
+            WebSocketBootstrap::from_request(&request).unwrap()
+        });
+        let session = Session::new(BOOTSTRAP.clone());
+        let parsed = message
+            .starts_with("afirma://")
+            .then(|| ProtocolRequest::parse_websocket(message));
+        match parsed {
+            Some(Ok(request)) => {
+                request.parameter("idsession") == Some(session.bootstrap.session())
+            }
+            _ => session.authenticated(message),
+        }
+    }
+}
+
 /// Application outcome for one authenticated request.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Decision {

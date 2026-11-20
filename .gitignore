@@ -8,6 +8,9 @@
 
 /packages/*/assets/tailwind.css
 /.test-artifacts/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/
 
 /node_modules/
 
