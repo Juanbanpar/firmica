@@ -1,2 +1,5 @@
 # Preserve the byte-for-byte source fingerprints on every checkout platform.
 crates/vendor/** -text
+
+# Parser regressions assert exact bytes, including line endings.
+fuzz/corpus/** -text
