@@ -206,8 +206,8 @@ The current Dioxus 0.7 dependency requirements prevent a lockfile-only fix for e
 The signing libraries can be tested separately from the applications. They require patched OpenSSL development headers/libraries and the OpenSSL CLI; see the [OpenSSL build requirements](https://docs.rs/openssl/0.10.81/openssl/#building). Set `OPENSSL_DIR` and, when needed, `OPENSSL_LIB_DIR` for a native installation outside the compiler's search paths.
 
 ```sh
-cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11
-cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
+cargo test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation
+cargo doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --no-deps
 # Java 17+; downloads checksum-pinned, test-only AutoFirma 1.9.1 reference jars:
 cargo test --locked -p firmica-cades --test encoding autofirma_reference -- --ignored --test-threads=1
 # Poppler and XMLSec (OpenSSL backend) independently verify PDF/XML output:
@@ -217,7 +217,7 @@ cargo test --locked -p firmica-xades --test encoding xmlsec_ -- --ignored
 FIRMICA_PKCS11_MODULE=/path/to/libsofthsm2.so cargo test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
 ```
 
-The SoftHSM test creates a disposable token store and uses synthetic, non-exportable RSA/P-256 keys. PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. CAdES tests verify attached and detached signatures with the OpenSSL CLI, check certificate binding, and reject modified content. The token test also exercises CAdES encoding. No existing certificate store is opened.
+PKCS#12 tests cover encrypted containers, passwords, malformed input and message/digest signing. CAdES tests verify attached and detached signatures with the OpenSSL CLI, check certificate binding, and reject modified content. The optional SoftHSM test uses a disposable store and synthetic, non-exportable RSA/P-256 keys to exercise signing and CAdES encoding.
 
 The key-worker library keeps unlocked PKCS#12 keys in a separate Linux, macOS or Windows process. Linux applies address-space and CPU limits. Windows starts the worker suspended, assigns a job with committed-memory, user CPU and child-process limits, and kills it when the parent loses its job handle. Pipe operations have deadlines, and successful close is required before consuming signatures. Other platforms reject worker imports. Windows requests WER no-heap/no-UI reporting; privileged dumps and machine dump policies remain outside that guarantee. API contracts and limits are documented with rustdoc. macOS installs a five-second cumulative CPU limit, disables core files and denies debugger attachment before accepting credentials. Its parent samples physical footprint every 50 ms, terminating and reaping workers above 256 MiB or on accounting failure, including while idle. This is a supervised threshold with possible brief overshoot, rather than a hard allocation cap. Native crash reporting and privileged inspection remain outside this guarantee. The desktop application uses this worker for document signing on Linux, macOS and Windows.
 
@@ -231,12 +231,13 @@ Original code targets GPL-3.0-or-later. Third-party dependencies and reference a
 
 ### CI baseline
 
+CI runs for pull requests and pushes to `main`. Linux runs the shared Rust tests, independent cryptographic verification and headless browser interoperability. The build matrix packages desktop applications and checks worker behavior on Linux, Windows and macOS. Linux also builds the web app and checks the mobile host entry point. To run the optional PKCS#11 integration test, select **Also test the optional PKCS#11 provider with SoftHSM** when dispatching CI manually.
+
 Record the commit SHA, run URLs and attempt numbers when comparing baselines. For a cancelled job, inspect its check annotations and step list. A runner-acquisition error before any steps start has no test logs or artifacts. Retry that job on the same SHA with `gh run rerun RUN_ID --job JOB_ID`. The Linux interoperability job uploads protocol 4.1 evidence as `protocol41-browsers`.
 
 For a ruleset targeting `main`, require a pull request and select GitHub Actions as the expected source of these minimum status checks.
 
-- `audit` and `linux-interop`
-- `signing (ubuntu-latest)`, `signing (macos-latest)` and `signing (windows-latest)`
-- `rust (ubuntu-latest)`, `rust (macos-latest)` and `rust (windows-latest)`
+- `audit`, `rust-quality`, `cryptography` and `protocol-interop`
+- `build (ubuntu-latest)`, `build (windows-latest)` and `build (macos-latest)`
 
 Reserve required checks for jobs that run automatically on every PR. [GitHub required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)

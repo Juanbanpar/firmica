@@ -2,65 +2,73 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      pkcs11:
+        description: Also test the optional PKCS#11 provider with SoftHSM
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  signing:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+  rust-quality:
+    runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-      - name: Install Linux signing test dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2 poppler-utils xmlsec1
-      - name: Verify OpenSSL CLI
-        run: openssl version
-      - name: Configure Windows system OpenSSL
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:ProgramFiles 'OpenSSL'
-          $libraries = Join-Path $root 'lib\VC\x64\MD'
-          if (!(Test-Path "$libraries\libcrypto.lib") -or !(Test-Path "$libraries\libssl.lib")) {
-            throw "OpenSSL x64 import libraries missing at $libraries"
-          }
-          "OPENSSL_DIR=$root" >> $env:GITHUB_ENV
-          "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
-          "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
-      - run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11
-      - name: Verify macOS worker process controls
-        if: runner.os == 'macOS'
-        run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable test --locked -p firmica-core -p xtask
+      - run: cargo +stable clippy --locked --workspace --exclude desktop --exclude mobile --exclude web --exclude ui --all-targets -- -D warnings
+      - run: cargo +stable doc --locked --workspace --exclude desktop --exclude mobile --exclude web --exclude ui --no-deps
+
+  cryptography:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: rustup toolchain install stable --profile minimal
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev poppler-utils xmlsec1
+      - name: Test signing, certificate policy, and Linux worker isolation
+        run: cargo +stable test --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation
       - name: Independently verify PDF revisions and XML signatures
-        if: runner.os == 'Linux'
         run: |
           cargo +stable test --locked -p firmica-pades --test encoding poppler_ -- --ignored
           cargo +stable test --locked -p firmica-xades --test encoding xmlsec_ -- --ignored
       - name: Compare CAdES with AutoFirma and verify with SpongyCastle
-        if: runner.os == 'Linux'
         run: cargo +stable test --locked -p firmica-cades --test encoding autofirma_reference -- --ignored --test-threads=1
-      - name: Exercise non-exportable SoftHSM keys
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
-          test -n "$module"
-          FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
-      - run: cargo +stable clippy --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --all-targets -- -D warnings
-      - run: cargo +stable doc --locked -p firmica-signing -p firmica-certificates -p firmica-cades -p firmica-pades -p firmica-xades -p firmica-key-worker -p firmica-validation --features pkcs11 --no-deps
 
-  rust:
+  protocol-interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: rustup toolchain install stable --profile minimal
+      - name: Test URI parsing, session handling, and WebSocket transport
+        run: cargo +stable test --locked -p firmica-protocol -p firmica-transport
+      - run: npm ci
+      - name: Install headless browsers and NSS tools
+        run: |
+          npx playwright install --with-deps chromium firefox
+          sudo apt-get install -y libnss3-tools
+      - run: cargo +stable build --locked -p firmica-transport --example probe
+      - run: npm run test:autoscript
+      - name: Verify protocol 4.1 with Chromium and Firefox
+        run: cargo +stable test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- --ignored --nocapture
+      - name: Save protocol 4.1 browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: protocol41-browsers
+          path: .test-artifacts/protocol41/
+          if-no-files-found: warn
+
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -68,14 +76,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-      - name: Install Linux WebView dependencies
+      - run: rustup toolchain install stable --profile minimal
+      - name: Install Linux desktop build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev
-      - run: cargo +stable fmt --all --check
-      - run: cargo +stable test --locked -p firmica-protocol -p firmica-core -p firmica-transport
-      - run: cargo +stable clippy --locked -p firmica-protocol -p firmica-core -p firmica-transport --all-targets -- -D warnings
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev desktop-file-utils
+          rustup component add --toolchain stable clippy
+          rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Configure Windows system OpenSSL
         if: runner.os == 'Windows'
         shell: pwsh
@@ -88,16 +96,6 @@ jobs:
           "OPENSSL_DIR=$root" >> $env:GITHUB_ENV
           "OPENSSL_LIB_DIR=$libraries" >> $env:GITHUB_ENV
           "OPENSSL_STATIC=0" >> $env:GITHUB_ENV
-      - run: cargo +stable test --locked -p xtask
-      - run: cargo +stable clippy --locked -p xtask --all-targets -- -D warnings
-      - name: Install verified Dioxus CLI 0.7.10
-        run: cargo xtask install-dx
-      - name: Build Linux desktop application
-        if: runner.os == 'Linux'
-        run: dx build --locked --package desktop --platform desktop
-      - name: Build Windows portable application and native worker
-        if: runner.os == 'Windows'
-        run: cargo xtask bundle --debug
       - name: Configure macOS system OpenSSL
         if: runner.os == 'macOS'
         run: |
@@ -106,6 +104,25 @@ jobs:
           echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
           echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
+      - name: Verify Windows and macOS worker process controls
+        if: runner.os != 'Linux'
+        run: cargo +stable test --locked -p firmica-key-worker
+      - name: Verify macOS worker pipe deadlines and cleanup
+        if: runner.os == 'macOS'
+        run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
+      - name: Install verified Dioxus CLI 0.7.10
+        run: cargo xtask install-dx
+      - name: Build Linux Debian package
+        if: runner.os == 'Linux'
+        run: cargo xtask bundle
+      - name: Verify Debian package metadata and payload
+        if: runner.os == 'Linux'
+        env:
+          FIRMICA_DEB: ${{ github.workspace }}/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb
+        run: cargo +stable test --locked -p xtask --test debian -- --ignored
+      - name: Build Windows portable package
+        if: runner.os == 'Windows'
+        run: cargo xtask bundle --debug
       - name: Build and verify the macOS application bundle
         if: runner.os == 'macOS'
         run: |
@@ -115,9 +132,17 @@ jobs:
           ditto -x -k target/dx/firmica/bundle/macos/firmica-*.zip "$destination"
           app=$(find "$destination" -maxdepth 1 -name '*.app' -type d)
           codesign --verify --deep --strict "$app"
-      # Generates mobile assets and checks its host entry point.
-      - run: dx build --locked --package mobile --platform desktop --features mobile
-      - run: cargo +stable test --locked -p desktop -p mobile
+      - name: Build web and check the mobile host entry point
+        if: runner.os == 'Linux'
+        run: |
+          dx build --locked --package web --platform web
+          dx build --locked --package mobile --platform desktop --features mobile
+      - name: Test desktop, mobile host, and shared UI
+        if: runner.os == 'Linux'
+        run: cargo +stable test --locked -p desktop -p mobile -p ui
+      - name: Test desktop on Windows and macOS
+        if: runner.os != 'Linux'
+        run: cargo +stable test --locked -p desktop
       - name: Verify desktop signing and cleanup with the native worker
         env:
           WORKER_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -125,41 +150,9 @@ jobs:
         run: |
           cargo +stable build --locked -p firmica-key-worker
           FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker$WORKER_SUFFIX" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
-      - run: cargo +stable clippy --locked -p ui -p desktop -p mobile --all-targets -- -D warnings
-      - run: cargo +stable doc --locked -p firmica-protocol -p firmica-core -p firmica-transport --no-deps
-
-  linux-interop:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Install prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev desktop-file-utils libnss3-tools
-          rustup toolchain install stable --profile minimal
-          rustup target add --toolchain stable wasm32-unknown-unknown
-      - name: Install verified Dioxus CLI 0.7.10
-        run: cargo xtask install-dx
-      - name: Build Linux application and companion worker bundle
-        run: cargo xtask bundle
-      - name: Verify Debian package metadata and payload
-        env:
-          FIRMICA_DEB: ${{ github.workspace }}/target/dx/firmica/bundle/linux/deb/firmica_0.1.0_amd64.deb
-        run: cargo test --locked -p xtask --test debian -- --ignored
-      - run: dx build --locked --package web --platform web
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium firefox
-      - run: cargo +stable build --locked -p firmica-transport --example probe
-      - run: npm run test:autoscript
-      - name: Verify protocol 4.1 with Chromium and Firefox
-        run: cargo test --locked -p firmica-transport protocol_41_in_chromium_and_firefox -- --ignored --nocapture
-      - name: Save protocol 4.1 browser evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: protocol41-browsers
-          path: .test-artifacts/protocol41/
-          if-no-files-found: warn
+      - name: Lint application packages
+        if: runner.os == 'Linux'
+        run: cargo +stable clippy --locked -p ui -p desktop -p mobile --all-targets -- -D warnings
 
   audit:
     runs-on: ubuntu-latest
@@ -168,3 +161,16 @@ jobs:
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies with accepted GLib and rand advisories
         run: cargo audit --deny unsound --ignore RUSTSEC-2024-0429 --ignore RUSTSEC-2026-0097
+
+  pkcs11:
+    if: github.event_name == 'workflow_dispatch' && inputs.pkcs11
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: rustup toolchain install stable --profile minimal
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
+      - name: Exercise non-exportable SoftHSM keys
+        run: |
+          module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
+          test -n "$module"
+          FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
