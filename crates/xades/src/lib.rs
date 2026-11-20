@@ -15,6 +15,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use bergshamra_c14n::{canonicalize, canonicalize_doc, C14nMode};
 use bergshamra_xml::{NodeSet, XmlDocument};
 use der::{asn1::UintRef, Decode, Encode, Sequence};
+use firmica_signing::limits::{MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES};
 use firmica_signing::{
     InputKind, SignatureAlgorithm, SigningCapability, SigningError, SigningInput, SigningKey,
 };
@@ -28,12 +29,11 @@ const EXC: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
 const BASE64: &str = "http://www.w3.org/2000/09/xmldsig#base64";
 const PREFIX: &str = "Firmica-";
 
-/// Maximum reviewed input size (16 MiB).
-pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 /// Bound including base64 content, certificates and XML markup.
 pub const MAX_SIGNATURE_BYTES: usize = 26 * 1024 * 1024;
 
 pub use firmica_signing::format::XmlMode;
+pub use firmica_signing::limits::MAX_CONTENT_BYTES;
 
 /// Static failures, without document contents or native diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -209,10 +209,10 @@ pub fn sign(
 ) -> Result<Vec<u8>, XadesError> {
     preflight(content, mode)?;
     let identity = key.identity();
-    if identity.additional_certificates.len() >= 32
+    if identity.additional_certificates.len() >= MAX_CERTIFICATES
         || std::iter::once(&identity.certificate_der)
             .chain(&identity.additional_certificates)
-            .any(|c| c.len() > 64 * 1024)
+            .any(|c| c.len() > MAX_CERTIFICATE_BYTES)
     {
         return Err(XadesError::InputTooLarge);
     }

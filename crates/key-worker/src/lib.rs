@@ -58,10 +58,7 @@ pub const MAX_PASSWORD_BYTES: usize = 4096;
 /// Maximum message length sent through [`SigningKey::sign`] (1 MiB).
 /// Larger messages can use the fixed-size SHA-256 digest input.
 pub const MAX_SIGNING_INPUT_BYTES: usize = 1024 * 1024;
-/// Maximum number of public certificates returned, including the leaf.
-pub const MAX_CERTIFICATES: usize = 32;
-/// Maximum DER size per returned certificate (64 KiB).
-pub const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
+pub use firmica_signing::limits::{MAX_CERTIFICATES, MAX_CERTIFICATE_BYTES};
 /// Hard Linux address-space limit for each worker (256 MiB).
 pub const MAX_ADDRESS_SPACE_BYTES: u64 = 256 * 1024 * 1024;
 /// Windows per-worker committed-memory limit (256 MiB), not virtual address space.

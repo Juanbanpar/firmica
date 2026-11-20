@@ -9,6 +9,7 @@
 #![deny(missing_docs)]
 
 pub mod format;
+pub mod limits;
 
 /// Precisely specified initial algorithms; no implicit hash or RSA padding selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
