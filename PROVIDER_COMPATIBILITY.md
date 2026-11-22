@@ -6,6 +6,8 @@ This baseline follows [AutoFirma master at `bd9254be70004be095b1251b5a4af15b9d39
 
 ## Desktop stores
 
+The [AutoFirma 1.9 installation manual][manual], sections 2 and 9.3, lists Windows 7 through 11 (including 8.1), macOS Big Sur through Ventura, and testing on Ubuntu, Fedora and openSUSE. These are published application-level requirements for 1.9.0. Provider-specific coverage at the pinned source revision depends on the runtime and middleware. The manual also documents missing Windows elliptic-curve identities with older Java builds.
+
 In the algorithm column, **RSA** means RSA PKCS#1 v1.5 with SHA-256 and a modulus of at least 2048 bits. **P-256** means ECDSA P-256 with SHA-256. These are the Firmica profiles to verify. AutoFirma delegates operations to the selected JCA provider and key, so a factory route alone establishes neither an algorithm guarantee nor hardware support. A platform listed below is a source or planning scope. Driver, runtime and OS combinations must be verified before claiming version support.
 
 | AutoFirma identifier or target | Classification and discovery | Private-key access, authentication and algorithms | Platform and prerequisites | Firmica evidence and required verification |
@@ -23,6 +25,10 @@ In the algorithm column, **RSA** means RSA PKCS#1 v1.5 with SHA-256 and a modulu
 | `JCEKS` | Signing capable for private-key entries. File and JCA alias selection. | Software private key with store and entry passwords. Target RSA and P-256; secret-key entries do not sign documents. | Desktop with compatible JCEKS provider and protection algorithms. Firmica target is its desktop package platforms; runtime requirements pending. | Gap. Use JCE fixtures for protection variants, unsupported entries, signatures and cleanup. No physical device needed. [Java dispatch][manager]. |
 | `SINGLE` / PKCS#7 or X.509 | Public certificates. AutoFirma file route uses its SingleCert SPI. | No private key, authentication or signing algorithms. | Desktop. AutoFirma bundles a SingleCert provider. Firmica targets its desktop package platforms. | Gap. Test X.509 and certificate-only PKCS#7 fixtures and verify they cannot be selected for signing. No physical device needed. [SingleCert SPI][single]. |
 | Encrypted PKCS#8 / PEM | Additional Firmica assessment. No separate store identifier in the pinned factory. | Software key plus matching certificate and password. Assess RSA and P-256 with bounded protection parameters. | Desktop scope pending format and worker assessment. | Gap. Use independent OpenSSL-generated fixtures and deliberate mismatches. No physical device needed. |
+
+## Provider core
+
+Desktop PKCS#12/PFX uses the provider registry and a worker-backed session. The selected file bytes, certificate and key reference are fixed through review. Synthetic provider tests cover duplicate names, stale references, capability changes, cancellation, concurrent sessions and release failures. Desktop tests verify worker cleanup and RSA/P-256 signatures in CAdES with OpenSSL, and on Linux in PAdES with Poppler and XAdES with XMLSec.
 
 ## Specialized smart cards
 
@@ -72,3 +78,4 @@ The pinned desktop factory has no route for these mobile APIs. These are Firmica
 [java-card]: https://github.com/ctt-gob-es/clienteafirma/blob/bd9254be70004be095b1251b5a4af15b9d392dd9/afirma-core-keystores/src/main/java/es/gob/afirma/keystores/AOKeyStoreManagerHelperFullJava.java
 [preferred-cards]: https://github.com/ctt-gob-es/clienteafirma/blob/bd9254be70004be095b1251b5a4af15b9d392dd9/afirma-core-keystores/src/main/java/es/gob/afirma/keystores/KeyStoreUtilities.java
 [known-cards]: https://github.com/ctt-gob-es/clienteafirma/blob/bd9254be70004be095b1251b5a4af15b9d392dd9/afirma-core-keystores/src/main/java/es/gob/afirma/keystores/SmartCardUnifiedKeyStoreManager.java
+[manual]: https://firmaelectronica.gob.es/content/dam/firmaelectronica/ciudadanos/descargas/pdf/AF-manual-instalacion-usuarios-ES%20v1-9.pdf

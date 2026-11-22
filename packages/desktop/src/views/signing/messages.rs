@@ -1,6 +1,6 @@
 use crate::signing::Error;
 use firmica_core::signing::ApprovalError;
-use firmica_key_worker::WorkerError;
+use firmica_providers::{pkcs12::WorkerError, Error as ProviderError};
 use firmica_validation::Restriction;
 
 pub(super) fn tr(es: bool, spanish: &'static str, english: &'static str) -> &'static str {
@@ -80,8 +80,8 @@ fn error_text(error: &Error, es: bool) -> String {
         Error::ReadInput => tr(es, "No se puede leer el archivo seleccionado. Debe ser un archivo normal.", "Cannot read the selected file. It must be a regular file."),
         Error::InputTooLarge => tr(es, "El archivo supera el límite indicado.", "The file exceeds the displayed size limit."),
         Error::MissingWorker => tr(es, "Falta el componente de certificados. Revisa la instalación de Firmica.", "The certificate worker is missing or unprotected. Check the Firmica installation."),
-        Error::Worker(WorkerError::Import(_)) => tr(es, "No se puede abrir el certificado. Revisa el archivo y la contraseña.", "Cannot open the certificate. Check the file and password."),
-        Error::Worker(_) => tr(es, "No se pudo completar la operación de certificados de forma segura. No se ha guardado ninguna firma.", "The certificate operation could not complete safely. No signature was saved."),
+        Error::Provider(ProviderError::Worker(WorkerError::Import(_))) => tr(es, "No se puede abrir el certificado. Revisa el archivo y la contraseña.", "Cannot open the certificate. Check the file and password."),
+        Error::Provider(_) => tr(es, "No se pudo completar la operación de certificados de forma segura. No se ha guardado ninguna firma.", "The certificate operation could not complete safely. No signature was saved."),
         Error::Approval(ApprovalError::CertificateRestricted(restrictions)) => {
             return format!("{} {}", tr(es, "Firma bloqueada:", "Signing blocked:"), restrictions.iter().map(|restriction| restriction_text(*restriction, es)).collect::<Vec<_>>().join("; "));
         }
