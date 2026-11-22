@@ -144,7 +144,8 @@ fn pkcs11_review_sign_and_save_with_nonexportable_keys() {
     assert!(!no_output.exists());
     assert_eq!(children(), before);
 
-    store.configure("slots.mechanisms = -CKM_SHA256_RSA_PKCS\n");
+    // SoftHSM 2.6 includes the leading '-' in the first exclusion name.
+    store.configure("slots.mechanisms = CKM_RSA_PKCS\n");
     assert!(matches!(
         store.open(&input, rsa, PIN, Some(PIN), format.clone()),
         Err(Error::Provider(ProviderError::NotSigningIdentity))
@@ -161,7 +162,6 @@ fn pkcs11_review_sign_and_save_with_nonexportable_keys() {
     let mut verifier = openssl::sign::Verifier::new(MessageDigest::sha256(), &public).unwrap();
     assert!(verifier.verify_oneshot(&signature.value, DOCUMENT).unwrap());
 
-    store.configure("slots.mechanisms = -CKM_ECDSA,CKM_ECDSA_SHA256\n");
     assert!(matches!(
         store.open(&input, ec, PIN, None, format.clone()),
         Err(Error::Provider(ProviderError::NotSigningIdentity))
