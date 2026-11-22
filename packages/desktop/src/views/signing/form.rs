@@ -1,4 +1,5 @@
 use super::{tr, BUTTON, FIELD};
+use crate::signing::native::NativeSource;
 use dioxus::prelude::*;
 use firmica_signing::{
     format::{Appearance, ContentMode, Format, PdfOptions, XmlMode},
@@ -12,10 +13,10 @@ pub(super) struct Inputs {
     pub(super) document: Signal<Option<PathBuf>>,
     pub(super) certificate: Signal<Option<PathBuf>>,
     pub(super) password: Signal<SecretString>,
+    pub(super) context_pin: Signal<Option<SecretString>>,
     pub(super) password_generation: Signal<u64>,
     pub(super) algorithm: Signal<SignatureAlgorithm>,
     pub(super) format: Signal<Format>,
-    #[cfg(any(windows, target_os = "macos"))]
     pub(super) native_certificates: Signal<super::native::Picker>,
 }
 
@@ -31,45 +32,42 @@ pub(super) fn SigningForm(
         document,
         certificate,
         mut password,
+        mut context_pin,
         password_generation,
         mut algorithm,
         mut format,
-        #[cfg(any(windows, target_os = "macos"))]
         native_certificates,
     } = inputs;
-    #[cfg(any(windows, target_os = "macos"))]
-    let use_pkcs12 = external || native_certificates.read().source().is_none();
-    #[cfg(not(any(windows, target_os = "macos")))]
-    let use_pkcs12 = true;
-    #[cfg(any(windows, target_os = "macos"))]
+    let native_source = if external {
+        None
+    } else {
+        native_certificates.read().source()
+    };
+    let use_pkcs12 = native_source.is_none();
     let native_algorithm = if use_pkcs12 {
         None
     } else {
         native_certificates.read().algorithm()
     };
-    #[cfg(not(any(windows, target_os = "macos")))]
-    let native_algorithm: Option<SignatureAlgorithm> = None;
-    #[cfg(any(windows, target_os = "macos"))]
     let sources = {
         let mut generation = password_generation;
         rsx! {
-            if !external {
+            if !external && NativeSource::ALL.iter().any(|source| source.is_configured()) {
                 super::native::CertificatePicker {
                     picker: native_certificates, busy, spanish,
-                    on_change_source: move |_| {
+                    on_selection_change: move |_| {
                         password.set(SecretString::default());
+                        context_pin.set(None);
                         *generation.write() += 1;
                     }
                 }
             }
         }
     };
-    #[cfg(not(any(windows, target_os = "macos")))]
-    let sources = rsx! {};
     let certificate_ready = if use_pkcs12 {
         certificate.read().is_some()
     } else {
-        native_algorithm.is_some()
+        native_certificates.read().has_selection()
     };
     rsx! {
         div { class: "space-y-5",
@@ -92,6 +90,25 @@ pub(super) fn SigningForm(
                     }
                 }
             }
+            }
+            if native_source == Some(NativeSource::Pkcs11) && certificate_ready {
+                label { class: "block", {tr(spanish, "PIN del token (deja en blanco para usar el lector)", "Token PIN (leave blank to use the reader)")}
+                    for generation in [password_generation()] {
+                        input { key: "token-pin-{generation}", id: "sign-token-pin", class: FIELD, r#type: "password", autocomplete: "off", maxlength: "4096", disabled: busy(),
+                            oninput: move |event| password.set(SecretString::from(event.value())),
+                        }
+                    }
+                }
+                label { class: "block", {tr(spanish, "PIN de firma (solo si la clave lo requiere)", "Signing PIN (only if the key requires one)")}
+                    for generation in [password_generation()] {
+                        input { key: "context-pin-{generation}", id: "sign-context-pin", class: FIELD, r#type: "password", autocomplete: "off", maxlength: "4096", disabled: busy(),
+                            oninput: move |event| {
+                                let value = event.value();
+                                context_pin.set((!value.is_empty()).then(|| SecretString::from(value)));
+                            },
+                        }
+                    }
+                }
             }
             if !external {
             if use_pkcs12 {

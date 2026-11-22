@@ -1,5 +1,51 @@
 use crate::WorkerError;
+use secrecy::SecretString;
 use std::path::Path;
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(crate) mod signing;
+
+/// Explicit PKCS#11 authentication input. Never used for passive discovery.
+pub struct Pkcs11Pins {
+    /// Token USER PIN. Empty selects the token's protected authentication path.
+    pub user: SecretString,
+    /// Separate per-signature PIN for an always-authenticate key using host PINs.
+    pub context: Option<SecretString>,
+}
+
+impl crate::WorkerKey {
+    /// Open metadata and usable capabilities for an explicitly selected token certificate.
+    ///
+    /// Only the packaged worker loads the explicitly trusted module. The certificate URI
+    /// must have a nonempty binary object ID. The worker resolves a unique private key
+    /// with that ID and performs no signing probe. Call `close` after signing or
+    /// cancellation and check its result before publishing any signature.
+    ///
+    /// # Errors
+    /// Fails for invalid paths or locators, unavailable or ambiguous objects, authentication
+    /// or policy failures, or worker IPC and cleanup errors.
+    pub fn open_pkcs11(
+        executable: &Path,
+        module: &Path,
+        certificate: &str,
+        pins: Pkcs11Pins,
+    ) -> Result<Self, WorkerError> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            if !executable.is_absolute() {
+                return Err(WorkerError::InvalidInput);
+            }
+            let frame = crate::wire::pkcs11::open_request(module, certificate, &pins)?;
+            drop(pins);
+            Self::connect(executable, frame)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            let _ = (executable, module, certificate, pins);
+            Err(WorkerError::UnsupportedPlatform)
+        }
+    }
+}
 
 /// A publicly visible, persistent X.509 certificate reported by a PKCS#11 token.
 #[derive(Eq, PartialEq)]

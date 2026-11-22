@@ -686,6 +686,7 @@ dependencies = [
  "firmica-certificates",
  "firmica-signing",
  "libc",
+ "openssl",
  "pkcs11-client",
  "rustix",
  "secrecy",

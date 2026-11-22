@@ -124,7 +124,7 @@ fn decode_input(code: u8) -> Result<InputKind, WorkerError> {
     }
 }
 
-fn identity_response(key: &Pkcs12Key) -> Result<Frame, WorkerError> {
+fn identity_response(key: &impl SigningKey) -> Result<Frame, WorkerError> {
     let identity = key.identity();
     if identity.additional_certificates.len() >= MAX_CERTIFICATES {
         return Err(WorkerError::Protocol);
@@ -157,6 +157,9 @@ pub(crate) fn decode_identity(
             let error = decode_import_error(decoder.byte()?)?;
             decoder.end()?;
             return Err(WorkerError::Import(error));
+        }
+        pkcs11::DISCOVERY_ERROR => {
+            return Err(pkcs11::decode_error(encoded).unwrap_or(WorkerError::Protocol));
         }
         IDENTITY => (),
         _ => return Err(WorkerError::Protocol),
@@ -209,6 +212,9 @@ pub(crate) fn decode_signature(
         SIGNING_ERROR => {
             decoder.end()?;
             return Err(WorkerError::Unavailable);
+        }
+        pkcs11::DISCOVERY_ERROR => {
+            return Err(pkcs11::decode_error(encoded).unwrap_or(WorkerError::Protocol));
         }
         _ => return Err(WorkerError::Protocol),
     }
@@ -352,6 +358,11 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
         let response = pkcs11::discover_reply(module);
         return write_frame(&mut output, response.expose_secret());
     }
+    if bytes.first() == Some(&pkcs11::OPEN) {
+        let request = pkcs11::decode_open(bytes)?;
+        drop(opening);
+        return pkcs11::serve_open(request, &mut input, &mut output);
+    }
     let imported = import_key(bytes);
     drop(opening);
     let mut key = match imported {
@@ -363,14 +374,38 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
         Err(error) => return Err(error),
     };
     write_frame(&mut output, identity_response(&key)?.expose_secret())?;
-    while let Some(bytes) = read_frame(&mut input, MAX_REQUEST_BYTES)? {
+    let end = signing_requests(&mut key, &mut input, &mut output)?;
+    drop(key);
+    end.reply(&mut output)
+}
+
+enum SigningEnd {
+    Closed,
+    Failed,
+    Abandoned,
+}
+
+impl SigningEnd {
+    fn reply(self, output: &mut impl Write) -> Result<(), WorkerError> {
+        match self {
+            Self::Closed => write_frame(output, &[CLOSED]),
+            Self::Failed => write_frame(output, &[SIGNING_ERROR]),
+            Self::Abandoned => Ok(()),
+        }
+    }
+}
+
+fn signing_requests(
+    key: &mut impl SigningKey,
+    input: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<SigningEnd, WorkerError> {
+    while let Some(bytes) = read_frame(input, MAX_REQUEST_BYTES)? {
         let mut decoder = Decoder(bytes.expose_secret());
         match decoder.byte()? {
             CLOSE => {
                 decoder.end()?;
-                drop(key);
-                write_frame(&mut output, &[CLOSED])?;
-                return Ok(());
+                return Ok(SigningEnd::Closed);
             }
             SIGN => {
                 let (algorithm, input) = decode_sign_input(&mut decoder)?;
@@ -383,18 +418,17 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
                         let mut response =
                             frame(vec![SIGNATURE, algorithm_code(signature.algorithm)]);
                         put(response.expose_secret_mut(), &signature.value)?;
-                        write_frame(&mut output, response.expose_secret())?;
+                        write_frame(output, response.expose_secret())?;
                     }
                     Err(_) => {
-                        write_frame(&mut output, &[SIGNING_ERROR])?;
-                        return Ok(());
+                        return Ok(SigningEnd::Failed);
                     }
                 }
             }
             _ => return Err(WorkerError::Protocol),
         }
     }
-    Ok(())
+    Ok(SigningEnd::Abandoned)
 }
 
 /// Checks exactly one framed IPC record using the worker decoders without opening keys or
@@ -429,10 +463,9 @@ pub fn accepts_frame(mut input: &[u8]) -> bool {
             .and_then(decode_algorithm)
             .is_ok_and(|algorithm| decode_signature(payload, algorithm).is_ok()),
         Ok(pkcs11::DISCOVER) => pkcs11::decode_request(payload).is_ok(),
-        Ok(pkcs11::DISCOVERED | pkcs11::DISCOVERY_ERROR) => matches!(
-            pkcs11::decode_reply(payload),
-            Ok(_) | Err(WorkerError::Unavailable | WorkerError::CleanupFailed)
-        ),
+        Ok(pkcs11::OPEN) => pkcs11::decode_open(payload).is_ok(),
+        Ok(pkcs11::DISCOVERED) => pkcs11::decode_reply(payload).is_ok(),
+        Ok(pkcs11::DISCOVERY_ERROR) => pkcs11::decode_error(payload).is_some(),
         _ => payload == HELLO,
     }
 }

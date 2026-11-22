@@ -10,6 +10,8 @@
 mod candidate;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub mod pkcs11;
 pub mod pkcs12;
 mod registry;
 mod session;

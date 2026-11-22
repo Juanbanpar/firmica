@@ -12,6 +12,9 @@ secrecy.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+pkcs11-client = "0.1.1"
+
 [target.'cfg(windows)'.dependencies]
 openssl.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

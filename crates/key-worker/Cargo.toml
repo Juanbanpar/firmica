@@ -14,6 +14,7 @@ secrecy.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+openssl.workspace = true
 pkcs11-client = "0.1.1"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
