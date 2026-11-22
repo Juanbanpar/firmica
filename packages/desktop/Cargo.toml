@@ -27,7 +27,7 @@ clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["process", "fs"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
-firmica-key-worker.workspace = true
+firmica-providers.workspace = true
 firmica-signing.workspace = true
 firmica-validation.workspace = true
 secrecy.workspace = true

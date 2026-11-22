@@ -1,0 +1,13 @@
+[package]
+name = "firmica-providers"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+firmica-certificates.workspace = true
+firmica-key-worker.workspace = true
+firmica-signing.workspace = true
+secrecy.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true

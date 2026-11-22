@@ -1227,8 +1227,8 @@ dependencies = [
  "der",
  "dioxus",
  "firmica-core",
- "firmica-key-worker",
  "firmica-protocol",
+ "firmica-providers",
  "firmica-signing",
  "firmica-transport",
  "firmica-validation",
@@ -2164,6 +2164,18 @@ dependencies = [
  "base64 0.22.1",
  "firmica-signing",
  "percent-encoding",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "firmica-providers"
+version = "0.1.0"
+dependencies = [
+ "firmica-certificates",
+ "firmica-key-worker",
+ "firmica-signing",
+ "secrecy",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
 ]
 

@@ -11,6 +11,7 @@ members = [
     "crates/transport",
     "crates/signing",
     "crates/certificates",
+    "crates/providers",
     "crates/cades",
     "crates/pades",
     "crates/xades",
@@ -29,6 +30,7 @@ firmica-core = { path = "crates/core" }
 firmica-transport = { path = "crates/transport" }
 firmica-signing = { path = "crates/signing" }
 firmica-certificates = { path = "crates/certificates" }
+firmica-providers = { path = "crates/providers" }
 firmica-cades = { path = "crates/cades" }
 firmica-pades = { path = "crates/pades" }
 firmica-xades = { path = "crates/xades" }

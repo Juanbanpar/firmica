@@ -48,9 +48,53 @@ fn pdf_and_xml_use_the_controlled_worker_and_cleanup_before_publication() {
                     .unwrap()
                     .contains("<ds:SignatureValue>"));
             }
+            #[cfg(target_os = "linux")]
+            verify_pdf_or_xml(temp.path(), &format, &bytes);
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+fn verify_pdf_or_xml(directory: &Path, format: &Format, bytes: &[u8]) {
+    if matches!(format, Format::Pades(_)) {
+        fs::write(directory.join("signature.pdf"), bytes).unwrap();
+        let output = Command::new("pdfsig")
+            .env("LC_ALL", "C")
+            .current_dir(directory)
+            .args(["-nocert", "signature.pdf"])
+            .output()
+            .expect("Poppler pdfsig is required");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("Signature is Valid"),
+            "{stdout}"
+        );
+    } else {
+        fs::write(directory.join("signature.xml"), bytes).unwrap();
+        let output = Command::new("xmlsec1")
+            .current_dir(directory)
+            .args([
+                "--verify",
+                "--trusted-pem",
+                "certificate.pem",
+                "--enabled-reference-uris",
+                "empty,same-doc",
+                "--id-attr:Id",
+                "http://uri.etsi.org/01903/v1.3.2#:SignedProperties",
+                "--id-attr:Id",
+                "http://www.w3.org/2000/09/xmldsig#:Object",
+                "signature.xml",
+            ])
+            .output()
+            .expect("XMLSec is required");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 use firmica_signing::SignatureAlgorithm::{EcdsaP256Sha256 as EC, RsaPkcs1v15Sha256 as RSA};
 use openssl::{
     asn1::{Asn1Integer, Asn1Time},
@@ -447,7 +491,7 @@ fn cancellation_policy_import_and_destination_failures_leave_no_output_or_worker
             EC,
             ContentMode::Attached
         ),
-        Err(Error::Worker(_))
+        Err(Error::Provider(_))
     ));
     assert_eq!(children(), before);
     fixture(temp.path(), EC, true);
@@ -480,10 +524,122 @@ fn worker_failure_blocks_publication_and_is_reaped() {
         .success());
     assert!(matches!(
         pending.sign_and_save(&temp.path().join("failed.csig"), &AtomicBool::new(false)),
-        Err(Error::Worker(_))
+        Err(Error::Provider(_))
     ));
     assert!(!temp.path().join("failed.csig").exists());
     assert_eq!(children(), before);
+}
+
+#[test]
+#[ignore = "requires FIRMICA_TEST_WORKER; run serially against the built companion"]
+fn checked_cleanup_failure_discards_a_successful_signature() {
+    use firmica_providers::{
+        CertificateCandidate, Error as ProviderError, IdentityReference, Provider, ProviderId,
+        ProviderKey,
+    };
+    use firmica_signing::{
+        CertificateIdentity, Signature, SigningCapability, SigningError, SigningInput,
+    };
+    use std::sync::Arc;
+
+    struct FailingProvider(Pkcs12Provider, Arc<AtomicBool>);
+    struct FailingKey(Box<dyn ProviderKey>, Arc<AtomicBool>);
+
+    impl Provider for FailingProvider {
+        fn id(&self) -> &ProviderId {
+            self.0.id()
+        }
+
+        fn is_available(&self) -> bool {
+            self.0.is_available()
+        }
+
+        fn discover(&self) -> Result<Vec<CertificateCandidate>, ProviderError> {
+            self.0.discover()
+        }
+
+        fn open(
+            &mut self,
+            selection: Selection<'_>,
+            credentials: Credentials,
+        ) -> Result<Box<dyn ProviderKey>, ProviderError> {
+            let key = self.0.open(selection, credentials)?;
+            Ok(Box::new(FailingKey(key, self.1.clone())))
+        }
+    }
+
+    impl SigningKey for FailingKey {
+        fn identity(&self) -> &CertificateIdentity {
+            self.0.identity()
+        }
+
+        fn capabilities(&self) -> &[SigningCapability] {
+            self.0.capabilities()
+        }
+
+        fn sign(
+            &mut self,
+            algorithm: SignatureAlgorithm,
+            input: SigningInput<'_>,
+        ) -> Result<Signature, SigningError> {
+            let signature = self.0.sign(algorithm, input)?;
+            self.1.store(true, Ordering::Release);
+            Ok(signature)
+        }
+    }
+
+    impl ProviderKey for FailingKey {
+        fn revalidate(&mut self, reference: &IdentityReference) -> Result<(), ProviderError> {
+            self.0.revalidate(reference)
+        }
+
+        fn close(self: Box<Self>) -> Result<(), ProviderError> {
+            self.0.close()?;
+            Err(ProviderError::Cleanup)
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    fixture(temp.path(), EC, false);
+    let before = children();
+    for browser in [false, true] {
+        let signed = Arc::new(AtomicBool::new(false));
+        let container = read_bounded(&temp.path().join("identity.p12"), MAX_PKCS12_BYTES).unwrap();
+        let provider = Pkcs12Provider::new(worker(), container).unwrap();
+        let reference = provider.reference().clone();
+        let mut registry = Registry::default();
+        registry
+            .register(FailingProvider(provider, signed.clone()))
+            .unwrap();
+        let session = registry
+            .open(
+                Selection::Import(&reference),
+                Credentials::Password(PASSWORD.into()),
+            )
+            .unwrap();
+        let prepared = Prepared::prepare(
+            "document".into(),
+            DOCUMENT.to_vec(),
+            session,
+            EC,
+            ContentMode::Attached,
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let destination = temp.path().join("failed-cleanup.csig");
+        let result = if browser {
+            prepared.sign_for_browser(&cancelled).map(|_| ())
+        } else {
+            prepared.sign_and_save(&destination, &cancelled)
+        };
+        assert!(matches!(
+            result,
+            Err(Error::Provider(ProviderError::Cleanup))
+        ));
+        assert!(signed.load(Ordering::Acquire));
+        assert!(!destination.exists());
+        assert_eq!(children(), before);
+    }
 }
 
 #[cfg(windows)]

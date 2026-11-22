@@ -2,14 +2,14 @@
 //! run outside the UI loop. Browser data must first pass operation-specific decoding.
 
 use firmica_core::signing::{ApprovalError, SigningReview};
-use firmica_key_worker::{WorkerError, WorkerKey};
 use firmica_protocol::signing::SignResponse;
+use firmica_providers::{
+    pkcs12::{Pkcs12Provider, MAX_PKCS12_BYTES},
+    Credentials, Registry, Selection, SigningSession,
+};
 use firmica_signing::format::Format;
 use firmica_signing::limits::MAX_CONTENT_BYTES;
-use firmica_signing::{
-    CertificateIdentity, Signature, SignatureAlgorithm, SigningCapability, SigningError,
-    SigningInput, SigningKey,
-};
+use firmica_signing::{SignatureAlgorithm, SigningKey};
 use secrecy::{ExposeSecretMut, SecretBox, SecretString};
 use std::{
     io::{Read, Write},
@@ -20,14 +20,12 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::File;
 
-const MAX_CONTAINER_BYTES: usize = 8 * 1024 * 1024;
-
 #[derive(Debug)]
 pub enum Error {
     ReadInput,
     InputTooLarge,
     MissingWorker,
-    Worker(WorkerError),
+    Provider(firmica_providers::Error),
     Approval(ApprovalError),
     Save,
     DestinationExists,
@@ -92,7 +90,7 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
 
 /// Opaque, single-use imported key and frozen review. No Clone/Debug implementation.
 pub struct Prepared {
-    worker: Option<WorkerKey>,
+    session: Option<SigningSession>,
     review: Option<SigningReview>,
 }
 
@@ -131,15 +129,35 @@ impl Prepared {
         if document.len() > MAX_CONTENT_BYTES {
             return Err(Error::InputTooLarge);
         }
-        let container = read_bounded(container, MAX_CONTAINER_BYTES)?;
-        let key = WorkerKey::import(executable, container, password).map_err(Error::Worker)?;
-        match SigningReview::prepare(name, document, &key, algorithm, format) {
+        let container = read_bounded(container, MAX_PKCS12_BYTES)?;
+        let provider =
+            Pkcs12Provider::new(executable.to_owned(), container).map_err(Error::Provider)?;
+        let reference = provider.reference().clone();
+        let mut registry = Registry::default();
+        registry.register(provider).map_err(Error::Provider)?;
+        let session = registry
+            .open(
+                Selection::Import(&reference),
+                Credentials::Password(password),
+            )
+            .map_err(Error::Provider)?;
+        Self::prepare(name, document, session, algorithm, format)
+    }
+
+    fn prepare(
+        name: String,
+        document: Vec<u8>,
+        session: SigningSession,
+        algorithm: SignatureAlgorithm,
+        format: impl Into<Format>,
+    ) -> Result<Self, Error> {
+        match SigningReview::prepare(name, document, &session, algorithm, format) {
             Ok(review) => Ok(Self {
-                worker: Some(key),
+                session: Some(session),
                 review: Some(review),
             }),
             Err(error) => {
-                key.close().map_err(Error::Worker)?;
+                session.close().map_err(Error::Provider)?;
                 Err(Error::Approval(error))
             }
         }
@@ -152,11 +170,11 @@ impl Prepared {
     /// Explicit cancellation confirms cleanup without calling the private key.
     pub fn cancel(mut self) -> Result<(), Error> {
         self.review.take();
-        self.worker
+        self.session
             .take()
-            .expect("live worker")
+            .expect("live session")
             .close()
-            .map_err(Error::Worker)
+            .map_err(Error::Provider)
     }
 
     /// Called only after explicit UI approval and destination selection. Cleanup
@@ -176,15 +194,15 @@ impl Prepared {
     }
 
     /// Releases a bounded protocol response only after signing and confirmed
-    /// worker cleanup. The caller must deliver it only to the original live reply.
+    /// provider cleanup. The caller must deliver it only to the original live reply.
     pub fn sign_for_browser(self, cancelled: &AtomicBool) -> Result<SignResponse, Error> {
         let (certificate, signature) = self.sign_bytes(cancelled)?;
         SignResponse::new(&certificate, &signature).map_err(|_| Error::Response)
     }
 
     fn sign_bytes(mut self, cancelled: &AtomicBool) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        let mut worker = self.worker.take().expect("live worker");
-        let certificate = worker.identity().certificate_der.clone();
+        let mut session = self.session.take().expect("live session");
+        let certificate = session.identity().certificate_der.clone();
         let result = if cancelled.load(Ordering::Acquire) {
             Err(Error::Cancelled)
         } else {
@@ -192,13 +210,10 @@ impl Prepared {
                 .take()
                 .expect("live review")
                 .approve()
-                .sign(&mut CancellableKey {
-                    key: &mut worker,
-                    cancelled,
-                })
+                .sign(&mut session.cancellable(cancelled))
                 .map_err(Error::Approval)
         };
-        worker.close().map_err(Error::Worker)?;
+        session.close().map_err(Error::Provider)?;
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
@@ -206,38 +221,13 @@ impl Prepared {
     }
 }
 
-// Format parsing may take time after approval. Recheck cancellation immediately
-// before the private-key operation, as well as before/after the whole workflow.
-struct CancellableKey<'a> {
-    key: &'a mut WorkerKey,
-    cancelled: &'a AtomicBool,
-}
-impl SigningKey for CancellableKey<'_> {
-    fn identity(&self) -> &CertificateIdentity {
-        self.key.identity()
-    }
-    fn capabilities(&self) -> &[SigningCapability] {
-        self.key.capabilities()
-    }
-    fn sign(
-        &mut self,
-        algorithm: SignatureAlgorithm,
-        input: SigningInput<'_>,
-    ) -> Result<Signature, SigningError> {
-        if self.cancelled.load(Ordering::Acquire) {
-            return Err(SigningError::BackendFailure);
-        }
-        self.key.sign(algorithm, input)
-    }
-}
-
 impl Drop for Prepared {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
+        if let Some(session) = self.session.take() {
             // Unmounting a component or abandoning an async task must not perform
-            // blocking process I/O on the UI loop. No signature is published here.
+            // blocking provider I/O on the UI loop. No signature is published here.
             let _ = std::thread::Builder::new().spawn(move || {
-                let _ = worker.close();
+                let _ = session.close();
             });
         }
     }
