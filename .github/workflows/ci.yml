@@ -233,8 +233,9 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
-      - name: Exercise non-exportable SoftHSM keys
+      - name: Exercise SoftHSM discovery and non-exportable keys
         run: |
           module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
           test -n "$module"
           FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-certificates --features pkcs11 --test pkcs11 -- --ignored --test-threads=1
+          FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-key-worker --test pkcs11 -- --ignored --test-threads=1

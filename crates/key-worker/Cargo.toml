@@ -13,6 +13,9 @@ firmica-signing.workspace = true
 secrecy.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+pkcs11-client = "0.1.1"
+
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "1", features = ["process", "fs", "event"] }
 

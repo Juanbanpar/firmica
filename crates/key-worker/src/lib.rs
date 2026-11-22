@@ -1,4 +1,4 @@
-//! Resource-controlled PKCS#12 import and signing in a separate native process.
+//! Resource-controlled PKCS#12 signing and PKCS#11 discovery in a separate native process.
 //!
 //! Linux workers set a 256 MiB address-space limit, a cumulative five-second CPU
 //! limit and non-dumpable status before reading credentials. Parent pipe I/O uses
@@ -44,6 +44,7 @@ mod test_support;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos;
+mod pkcs11;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod process;
 #[cfg(windows)]
@@ -52,6 +53,8 @@ mod process;
 mod process;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod wire;
+
+pub use pkcs11::{discover_pkcs11, Pkcs11Certificate, Pkcs11Token};
 
 /// In-memory IPC decoding for the repository fuzz targets.
 #[cfg(all(

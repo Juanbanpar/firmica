@@ -10,6 +10,8 @@ use firmica_signing::{
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use std::io::{Read, Write};
 
+pub(crate) mod pkcs11;
+
 pub(crate) const HELLO: &[u8] = b"FRMKEY\x01";
 pub(crate) const CLOSE: u8 = 3;
 pub(crate) const CLOSED: u8 = 4;
@@ -307,9 +309,8 @@ fn decode_sign_input<'a>(
     Ok((algorithm, input))
 }
 
-fn import_key(input: &mut impl Read) -> Result<Pkcs12Key, WorkerError> {
-    let bytes = read_frame(input, MAX_REQUEST_BYTES)?.ok_or(WorkerError::Protocol)?;
-    let (container, password) = decode_import_request(bytes.expose_secret())?;
+fn import_key(bytes: &[u8]) -> Result<Pkcs12Key, WorkerError> {
+    let (container, password) = decode_import_request(bytes)?;
     let password = SecretString::from(password.to_owned());
     Ok(Pkcs12Key::from_der(container, &password)?)
 }
@@ -344,7 +345,16 @@ pub(crate) fn serve() -> Result<(), WorkerError> {
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     write_frame(&mut output, HELLO)?;
-    let mut key = match import_key(&mut input) {
+    let opening = read_frame(&mut input, MAX_REQUEST_BYTES)?.ok_or(WorkerError::Protocol)?;
+    let bytes = opening.expose_secret();
+    if bytes.first() == Some(&pkcs11::DISCOVER) {
+        let module = pkcs11::decode_request(bytes)?;
+        let response = pkcs11::discover_reply(module);
+        return write_frame(&mut output, response.expose_secret());
+    }
+    let imported = import_key(bytes);
+    drop(opening);
+    let mut key = match imported {
         Ok(key) => key,
         Err(WorkerError::Import(error)) => {
             write_frame(&mut output, &[IMPORT_ERROR, import_error(error)])?;
@@ -418,6 +428,11 @@ pub fn accepts_frame(mut input: &[u8]) -> bool {
             .byte()
             .and_then(decode_algorithm)
             .is_ok_and(|algorithm| decode_signature(payload, algorithm).is_ok()),
+        Ok(pkcs11::DISCOVER) => pkcs11::decode_request(payload).is_ok(),
+        Ok(pkcs11::DISCOVERED | pkcs11::DISCOVERY_ERROR) => matches!(
+            pkcs11::decode_reply(payload),
+            Ok(_) | Err(WorkerError::Unavailable | WorkerError::CleanupFailed)
+        ),
         _ => payload == HELLO,
     }
 }
