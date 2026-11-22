@@ -33,6 +33,8 @@ pub enum Credentials {
     Password(SecretString),
     /// A token PIN.
     Pin(SecretString),
+    /// Explicit USER and optional context-specific authentication input.
+    Token(firmica_key_worker::Pkcs11Pins),
 }
 
 /// One configured provider source. Discovery must never prompt or use a private
@@ -150,7 +152,7 @@ impl Registry {
                 let authentication = match &credentials {
                     Credentials::None => Authentication::None,
                     Credentials::Password(_) => Authentication::Password,
-                    Credentials::Pin(_) => Authentication::Pin,
+                    Credentials::Pin(_) | Credentials::Token(_) => Authentication::Pin,
                 };
                 (None, authentication)
             }

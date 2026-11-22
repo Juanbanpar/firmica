@@ -1,13 +1,14 @@
-use super::{read_document, Error, Prepared};
+use super::{packaged_worker, read_document, Error, Prepared};
 #[cfg(target_os = "macos")]
 use firmica_providers::macos::KeychainProvider;
 #[cfg(windows)]
 use firmica_providers::windows::{SystemStore, WindowsProvider};
 use firmica_providers::{
-    CertificateCandidate, Credentials, Provider, ProviderId, Registry, Selection,
+    pkcs11::Pkcs11Provider, CertificateCandidate, Credentials, Provider, ProviderId, Registry,
+    Selection,
 };
-use firmica_signing::{format::Format, SignatureAlgorithm};
-use std::path::Path;
+use firmica_signing::{format::Format, SigningKey};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeSource {
@@ -17,6 +18,7 @@ pub enum NativeSource {
     LocalMachine,
     #[cfg(target_os = "macos")]
     Keychain,
+    Pkcs11,
 }
 
 impl NativeSource {
@@ -27,22 +29,39 @@ impl NativeSource {
         Self::LocalMachine,
         #[cfg(target_os = "macos")]
         Self::Keychain,
+        Self::Pkcs11,
     ];
 
-    fn provider(self) -> impl Provider {
-        match self {
-            #[cfg(windows)]
-            Self::CurrentUser => WindowsProvider::new(SystemStore::CurrentUserPersonal),
-            #[cfg(windows)]
-            Self::LocalMachine => WindowsProvider::new(SystemStore::LocalMachinePersonal),
-            #[cfg(target_os = "macos")]
-            Self::Keychain => KeychainProvider::default(),
+    pub fn is_configured(self) -> bool {
+        self != Self::Pkcs11 || configured_module().is_some()
+    }
+}
+
+fn configured_module() -> Option<PathBuf> {
+    std::env::var_os("FIRMICA_PKCS11_MODULE").map(PathBuf::from)
+}
+
+fn registry(source: NativeSource) -> Result<(Registry, ProviderId), Error> {
+    match source {
+        #[cfg(windows)]
+        NativeSource::CurrentUser => {
+            register(WindowsProvider::new(SystemStore::CurrentUserPersonal))
+        }
+        #[cfg(windows)]
+        NativeSource::LocalMachine => {
+            register(WindowsProvider::new(SystemStore::LocalMachinePersonal))
+        }
+        #[cfg(target_os = "macos")]
+        NativeSource::Keychain => register(KeychainProvider::default()),
+        NativeSource::Pkcs11 => {
+            let module = configured_module()
+                .ok_or(Error::Provider(firmica_providers::Error::Unavailable))?;
+            register(Pkcs11Provider::new(packaged_worker()?, module).map_err(Error::Provider)?)
         }
     }
 }
 
-fn registry(source: NativeSource) -> Result<(Registry, ProviderId), Error> {
-    let provider = source.provider();
+pub(super) fn register(provider: impl Provider + 'static) -> Result<(Registry, ProviderId), Error> {
     let id = provider.id().clone();
     let mut registry = Registry::default();
     registry.register(provider).map_err(Error::Provider)?;
@@ -59,17 +78,35 @@ impl Prepared {
         document: &Path,
         source: NativeSource,
         candidate: &CertificateCandidate,
-        algorithm: SignatureAlgorithm,
+        credentials: Credentials,
         format: Format,
     ) -> Result<Self, Error> {
+        Self::open_native_from_registry(
+            document,
+            source,
+            candidate,
+            credentials,
+            format,
+            registry(source)?,
+        )
+    }
+
+    pub(super) fn open_native_from_registry(
+        document: &Path,
+        source: NativeSource,
+        candidate: &CertificateCandidate,
+        credentials: Credentials,
+        format: Format,
+        (mut registry, id): (Registry, ProviderId),
+    ) -> Result<Self, Error> {
         let (name, document) = read_document(document)?;
-        let (mut registry, id) = registry(source)?;
         if candidate.reference().provider() != &id {
             return Err(Error::Provider(firmica_providers::Error::StaleIdentity));
         }
         let session = registry
-            .open(Selection::Candidate(candidate), Credentials::None)
+            .open(Selection::Candidate(candidate), credentials)
             .map_err(Error::Provider)?;
+        let algorithm = session.capabilities()[0].algorithm;
         let mut prepared = Self::prepare(name, document, session, algorithm, format)?;
         prepared.native_source = Some(source);
         Ok(prepared)

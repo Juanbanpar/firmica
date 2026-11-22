@@ -1,4 +1,5 @@
 use crate::{CertificateCandidate, Error, IdentityReference};
+use firmica_key_worker::WorkerKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use firmica_signing::{
@@ -168,5 +169,49 @@ impl Drop for SigningSession {
         if let Some(key) = self.key.take() {
             let _ = key.close();
         }
+    }
+}
+
+pub(crate) struct WorkerProviderKey {
+    key: WorkerKey,
+    reference: IdentityReference,
+}
+
+impl WorkerProviderKey {
+    pub(crate) fn new(key: WorkerKey, reference: IdentityReference) -> Self {
+        Self { key, reference }
+    }
+}
+
+impl SigningKey for WorkerProviderKey {
+    fn identity(&self) -> &CertificateIdentity {
+        self.key.identity()
+    }
+
+    fn capabilities(&self) -> &[SigningCapability] {
+        self.key.capabilities()
+    }
+
+    fn sign(
+        &mut self,
+        algorithm: SignatureAlgorithm,
+        input: SigningInput<'_>,
+    ) -> Result<Signature, SigningError> {
+        self.key.sign(algorithm, input)
+    }
+}
+
+impl ProviderKey for WorkerProviderKey {
+    fn revalidate(&mut self, reference: &IdentityReference) -> Result<(), Error> {
+        // One worker owns the session. Its backend checks for native replacement
+        // before signing; IPC failure invalidates the proxy without reconnecting.
+        if reference != &self.reference {
+            return Err(Error::StaleIdentity);
+        }
+        Ok(())
+    }
+
+    fn close(self: Box<Self>) -> Result<(), Error> {
+        self.key.close().map_err(Error::from)
     }
 }

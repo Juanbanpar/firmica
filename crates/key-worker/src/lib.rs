@@ -1,4 +1,4 @@
-//! Resource-controlled PKCS#12 import and signing in a separate native process.
+//! Resource-controlled PKCS#12 and PKCS#11 signing in a separate native process.
 //!
 //! Linux workers set a 256 MiB address-space limit, a cumulative five-second CPU
 //! limit and non-dumpable status before reading credentials. Parent pipe I/O uses
@@ -44,6 +44,7 @@ mod test_support;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos;
+mod pkcs11;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod process;
 #[cfg(windows)]
@@ -52,6 +53,8 @@ mod process;
 mod process;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod wire;
+
+pub use pkcs11::{discover_pkcs11, Pkcs11Certificate, Pkcs11Pins, Pkcs11Token};
 
 /// In-memory IPC decoding for the repository fuzz targets.
 #[cfg(all(
@@ -104,6 +107,15 @@ pub enum WorkerError {
     /// Process cleanup could not be confirmed. Do not publish previous results.
     #[error("key-worker cleanup could not be confirmed")]
     CleanupFailed,
+    /// The token could not authenticate with the supplied credentials.
+    #[error("PKCS#11 authentication failed")]
+    TokenAuthentication,
+    /// The selected certificate or token object changed or disappeared.
+    #[error("the selected PKCS#11 identity is unavailable or ambiguous")]
+    TokenIdentity,
+    /// The selected token key has no supported signing capability.
+    #[error("the selected PKCS#11 identity cannot sign")]
+    TokenUnsupported,
 }
 
 /// A signing-key proxy with no private-key export operation, `Clone` or `Debug`.
@@ -163,33 +175,36 @@ impl WorkerKey {
         }
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
-            let mut process = process::Process::spawn(executable)?;
-            let result = (|| {
-                let deadline = std::time::Instant::now() + OPERATION_TIMEOUT;
-                if process.receive(deadline)?.expose_secret() != wire::HELLO {
-                    return Err(WorkerError::Protocol);
-                }
-                let frame =
-                    wire::import_request(container.expose_secret(), password.expose_secret())?;
-                // Do not retain the caller's password/container while waiting for native work.
-                drop(container);
-                drop(password);
-                process.send(&frame, deadline)?;
-                drop(frame);
-                wire::decode_identity(process.receive(deadline)?.expose_secret())
-            })();
-            match result {
-                Ok((identity, capabilities)) => Ok(Self {
-                    identity,
-                    capabilities,
-                    process: Some(process),
-                    failure: None,
-                }),
-                Err(error) => Err(process.abort(error)),
-            }
+            let frame = wire::import_request(container.expose_secret(), password.expose_secret())?;
+            drop(container);
+            drop(password);
+            Self::connect(executable, frame)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         unreachable!()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn connect(executable: &Path, frame: SecretBox<Vec<u8>>) -> Result<Self, WorkerError> {
+        let mut process = process::Process::spawn(executable)?;
+        let result = (|| {
+            let deadline = std::time::Instant::now() + OPERATION_TIMEOUT;
+            if process.receive(deadline)?.expose_secret() != wire::HELLO {
+                return Err(WorkerError::Protocol);
+            }
+            process.send(&frame, deadline)?;
+            drop(frame);
+            wire::decode_identity(process.receive(deadline)?.expose_secret())
+        })();
+        match result {
+            Ok((identity, capabilities)) => Ok(Self {
+                identity,
+                capabilities,
+                process: Some(process),
+                failure: None,
+            }),
+            Err(error) => Err(process.abort(error)),
+        }
     }
 
     /// Destroy the worker's key, confirm its acknowledgement and successful exit.
@@ -209,8 +224,10 @@ impl WorkerKey {
             let deadline = std::time::Instant::now() + OPERATION_TIMEOUT;
             let result = (|| {
                 process.send(&SecretBox::new(Box::new(vec![wire::CLOSE])), deadline)?;
-                if process.receive(deadline)?.expose_secret() != &[wire::CLOSED] {
-                    return Err(WorkerError::Protocol);
+                let reply = process.receive(deadline)?;
+                if reply.expose_secret() != &[wire::CLOSED] {
+                    return Err(wire::pkcs11::decode_error(reply.expose_secret())
+                        .unwrap_or(WorkerError::Protocol));
                 }
                 process.finish(deadline)
             })();

@@ -36,8 +36,14 @@ pub(super) fn exercise(
         (Format::Xades(XmlMode::Enveloped), b"<document/>".as_slice()),
     ] {
         fs::write(&input, document).unwrap();
-        let pending =
-            Prepared::open_native(&input, source, &candidate, algorithm, format.clone()).unwrap();
+        let pending = Prepared::open_native(
+            &input,
+            source,
+            &candidate,
+            firmica_providers::Credentials::None,
+            format.clone(),
+        )
+        .unwrap();
         assert_eq!(pending.native_source(), Some(source));
         assert_eq!(
             pending.review().certificate().fingerprint(),
@@ -80,20 +86,38 @@ pub(super) fn exercise(
     let cancelled_output = directory.path().join("cancelled.csig");
     let format = Format::Cades(ContentMode::Attached);
     assert!(matches!(
-        Prepared::open_native(&input, source, &candidate, algorithm, format.clone())
-            .unwrap()
-            .sign_and_save(&cancelled_output, &AtomicBool::new(true)),
+        Prepared::open_native(
+            &input,
+            source,
+            &candidate,
+            firmica_providers::Credentials::None,
+            format.clone()
+        )
+        .unwrap()
+        .sign_and_save(&cancelled_output, &AtomicBool::new(true)),
         Err(Error::Cancelled)
     ));
     assert!(!cancelled_output.exists());
-    let pending =
-        Prepared::open_native(&input, source, &candidate, algorithm, format.clone()).unwrap();
+    let pending = Prepared::open_native(
+        &input,
+        source,
+        &candidate,
+        firmica_providers::Credentials::None,
+        format.clone(),
+    )
+    .unwrap();
     remove();
     let stale_output = directory.path().join("stale.csig");
     assert!(pending.sign_and_save(&stale_output, &cancelled).is_err());
     assert!(!stale_output.exists());
     assert!(matches!(
-        Prepared::open_native(&input, source, &candidate, algorithm, format),
+        Prepared::open_native(
+            &input,
+            source,
+            &candidate,
+            firmica_providers::Credentials::None,
+            format
+        ),
         Err(Error::Provider(firmica_providers::Error::StaleIdentity))
     ));
 }

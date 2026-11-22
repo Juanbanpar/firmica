@@ -1,14 +1,10 @@
 //! One user-selected PKCS#12 or PFX container, opened in the isolated key worker.
 
 use crate::{
-    CertificateCandidate, Credentials, Error, IdentityReference, Provider, ProviderId, ProviderKey,
-    Selection,
+    session::WorkerProviderKey, CertificateCandidate, Credentials, Error, IdentityReference,
+    Provider, ProviderId, ProviderKey, Selection,
 };
 use firmica_key_worker::WorkerKey;
-use firmica_signing::{
-    CertificateIdentity, Signature, SignatureAlgorithm, SigningCapability, SigningError,
-    SigningInput, SigningKey,
-};
 use secrecy::{ExposeSecret, SecretBox};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -77,47 +73,9 @@ impl Provider for Pkcs12Provider {
         };
         let container = self.container.take().ok_or(Error::Unavailable)?;
         let key = WorkerKey::import(&self.executable, container, password)?;
-        Ok(Box::new(OpenedPkcs12 {
+        Ok(Box::new(WorkerProviderKey::new(
             key,
-            reference: self.reference.clone(),
-        }))
-    }
-}
-
-struct OpenedPkcs12 {
-    key: WorkerKey,
-    reference: IdentityReference,
-}
-
-impl SigningKey for OpenedPkcs12 {
-    fn identity(&self) -> &CertificateIdentity {
-        self.key.identity()
-    }
-
-    fn capabilities(&self) -> &[SigningCapability] {
-        self.key.capabilities()
-    }
-
-    fn sign(
-        &mut self,
-        algorithm: SignatureAlgorithm,
-        input: SigningInput<'_>,
-    ) -> Result<Signature, SigningError> {
-        self.key.sign(algorithm, input)
-    }
-}
-
-impl ProviderKey for OpenedPkcs12 {
-    fn revalidate(&mut self, reference: &IdentityReference) -> Result<(), Error> {
-        // The worker holds this import exclusively and never reloads it. IPC
-        // failures invalidate the handle rather than reconnecting to another key.
-        if reference != &self.reference {
-            return Err(Error::StaleIdentity);
-        }
-        Ok(())
-    }
-
-    fn close(self: Box<Self>) -> Result<(), Error> {
-        self.key.close().map_err(Error::from)
+            self.reference.clone(),
+        )))
     }
 }

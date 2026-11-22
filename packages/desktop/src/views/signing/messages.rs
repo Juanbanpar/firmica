@@ -35,8 +35,8 @@ impl Status {
             } else {
                 tr(
                     spanish,
-                    "Selecciona un documento y un certificado PKCS#12.",
-                    "Choose a document and a PKCS#12 certificate.",
+                    "Selecciona un documento y un certificado.",
+                    "Choose a document and a certificate.",
                 )
             }
             .to_owned(),
@@ -81,6 +81,8 @@ fn error_text(error: &Error, es: bool) -> String {
         Error::InputTooLarge => tr(es, "El archivo supera el límite indicado.", "The file exceeds the displayed size limit."),
         Error::MissingWorker => tr(es, "Falta el componente de certificados. Revisa la instalación de Firmica.", "The certificate worker is missing or unprotected. Check the Firmica installation."),
         Error::Provider(ProviderError::Worker(WorkerError::Import(_))) => tr(es, "No se puede abrir el certificado. Revisa el archivo y la contraseña.", "Cannot open the certificate. Check the file and password."),
+        Error::Provider(ProviderError::Worker(WorkerError::TokenAuthentication)) => tr(es, "No se pudo autenticar el token. Comprueba el PIN, el PIN de firma o el lector.", "Token authentication failed. Check the token PIN, signing PIN, or reader."),
+        Error::Provider(ProviderError::NotSigningIdentity) => tr(es, "El certificado no tiene una clave accesible con un mecanismo de firma compatible.", "The certificate has no accessible key with a supported signing mechanism."),
         Error::Provider(ProviderError::AuthenticationRequired) => tr(es, "Desbloquea el almacén de certificados y vuelve a intentarlo.", "Unlock the certificate store and try again."),
         Error::Provider(ProviderError::StaleIdentity) => tr(es, "El certificado seleccionado ha cambiado o ha desaparecido. Actualiza la lista y vuelve a seleccionarlo.", "The selected certificate changed or disappeared. Refresh the list and select it again."),
         Error::Provider(_) => tr(es, "No se pudo completar la operación de certificados de forma segura. No se ha guardado ninguna firma.", "The certificate operation could not complete safely. No signature was saved."),

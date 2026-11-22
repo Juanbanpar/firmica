@@ -105,7 +105,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev dpkg-dev desktop-file-utils poppler-utils xmlsec1
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev libssl-dev dpkg-dev desktop-file-utils poppler-utils xmlsec1 softhsm2
           rustup component add --toolchain stable clippy
           rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Configure Windows system OpenSSL
@@ -177,6 +177,12 @@ jobs:
         shell: bash
         run: |
           cargo +stable build --locked -p firmica-key-worker
+          if [[ "${{ runner.os }}" == Linux ]]; then
+            module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
+            test -f "$module"
+            FIRMICA_PKCS11_MODULE="$module" cargo +stable test --locked -p firmica-key-worker --test pkcs11 -- --include-ignored --test-threads=1
+            export FIRMICA_TEST_PKCS11_MODULE="$module"
+          fi
           FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker$WORKER_SUFFIX" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
       - name: Save native store signature fixtures for independent verification
         if: runner.os != 'Linux' && !matrix.package_only
@@ -233,7 +239,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
-      - name: Exercise non-exportable SoftHSM keys
+      - name: Exercise non-exportable SoftHSM keys with the library adapter
         run: |
           module=$(dpkg -L libsofthsm2 | awk '/\/libsofthsm2\.so$/ && !module { module=$0 } END { print module }')
           test -n "$module"

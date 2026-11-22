@@ -60,6 +60,7 @@ fn verify_pdf_or_xml(directory: &Path, format: &Format, bytes: &[u8]) {
         fs::write(directory.join("signature.pdf"), bytes).unwrap();
         let output = Command::new("pdfsig")
             .env("LC_ALL", "C")
+            .env_remove("SOFTHSM2_CONF")
             .current_dir(directory)
             .args(["-nocert", "signature.pdf"])
             .output()
@@ -67,11 +68,13 @@ fn verify_pdf_or_xml(directory: &Path, format: &Format, bytes: &[u8]) {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success() && stdout.contains("Signature is Valid"),
-            "{stdout}"
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     } else {
         fs::write(directory.join("signature.xml"), bytes).unwrap();
         let output = Command::new("xmlsec1")
+            .env_remove("SOFTHSM2_CONF")
             .current_dir(directory)
             .args([
                 "--verify",
@@ -673,3 +676,5 @@ mod windows_store;
 mod macos_keychain;
 #[cfg(any(windows, target_os = "macos"))]
 mod native_store;
+#[cfg(target_os = "linux")]
+mod pkcs11;

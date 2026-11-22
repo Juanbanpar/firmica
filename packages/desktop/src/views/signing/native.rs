@@ -7,7 +7,10 @@ use crate::signing::{
     Error,
 };
 use dioxus::prelude::*;
-use firmica_providers::{Availability, CertificateCandidate, Error as ProviderError};
+use firmica_providers::{
+    pkcs11::Pkcs11Provider, Authentication, Availability, CertificateCandidate,
+    Error as ProviderError,
+};
 use firmica_signing::SignatureAlgorithm;
 use firmica_validation::{assess_document_signing, CertificateAssessment};
 use std::{collections::HashMap, time::SystemTime};
@@ -28,19 +31,21 @@ struct Entry {
 }
 
 impl Entry {
-    fn algorithm(&self) -> Option<SignatureAlgorithm> {
-        if self.duplicate
-            || !matches!(
+    fn selectable(&self) -> bool {
+        !self.duplicate
+            && matches!(
                 self.candidate.availability(),
                 Availability::Available | Availability::Locked
             )
-            || !self
+            && self
                 .assessment
                 .as_ref()
                 .is_some_and(CertificateAssessment::permits_local_signing)
-        {
-            return None;
-        }
+            && (self.candidate.authentication() == Authentication::Pin
+                || !self.candidate.capabilities().is_empty())
+    }
+
+    fn algorithm(&self) -> Option<SignatureAlgorithm> {
         self.candidate
             .capabilities()
             .first()
@@ -54,8 +59,17 @@ impl Entry {
         );
         let status = if self.duplicate {
             tr(spanish, "selección ambigua", "ambiguous selection")
-        } else if let Some(algorithm) = self.algorithm() {
-            algorithm_name(algorithm)
+        } else if self.selectable() {
+            self.algorithm().map_or_else(
+                || {
+                    tr(
+                        spanish,
+                        "requiere autenticación del token",
+                        "token authentication required",
+                    )
+                },
+                algorithm_name,
+            )
         } else if self.candidate.availability() == Availability::PublicOnly {
             tr(spanish, "sin clave privada", "no private key")
         } else if self.candidate.capabilities().is_empty() {
@@ -67,10 +81,17 @@ impl Entry {
         } else {
             tr(spanish, "restricciones locales", "local restrictions")
         };
-        format!(
+        let mut label = format!(
             "{subject} · {status} · {}",
             hex(self.candidate.fingerprint())
-        )
+        );
+        if self.candidate.authentication() == Authentication::Pin {
+            if let Some(token) = Pkcs11Provider::selection_label(&self.candidate) {
+                label.push_str(" · ");
+                label.push_str(&token);
+            }
+        }
+        label
     }
 }
 
@@ -79,11 +100,16 @@ impl Picker {
         self.source
     }
 
-    pub(super) fn selected(
-        &self,
-    ) -> Option<(NativeSource, CertificateCandidate, SignatureAlgorithm)> {
+    pub(super) fn selected(&self) -> Option<(NativeSource, CertificateCandidate)> {
+        let source = self.source?;
         let entry = self.entries.get(self.selected?)?;
-        Some((self.source?, entry.candidate.clone(), entry.algorithm()?))
+        entry
+            .selectable()
+            .then(|| (source, entry.candidate.clone()))
+    }
+
+    pub(super) fn has_selection(&self) -> bool {
+        self.selected.is_some()
     }
 
     pub(super) fn algorithm(&self) -> Option<SignatureAlgorithm> {
@@ -99,11 +125,7 @@ impl Picker {
             .split_once(':')
             .filter(|(generation, _)| generation.parse::<u64>() == Ok(self.generation))
             .and_then(|(_, index)| index.parse::<usize>().ok())
-            .filter(|index| {
-                self.entries
-                    .get(*index)
-                    .is_some_and(|entry| entry.algorithm().is_some())
-            });
+            .filter(|index| self.entries.get(*index).is_some_and(Entry::selectable));
     }
 }
 
@@ -121,6 +143,7 @@ pub(super) fn source_label(source: NativeSource, spanish: bool) -> &'static str 
         }
         #[cfg(target_os = "macos")]
         NativeSource::Keychain => tr(spanish, "Llavero de macOS", "macOS Keychain"),
+        NativeSource::Pkcs11 => tr(spanish, "Token PKCS#11", "PKCS#11 token"),
     }
 }
 
@@ -132,6 +155,7 @@ fn source_value(source: NativeSource) -> &'static str {
         NativeSource::LocalMachine => "machine",
         #[cfg(target_os = "macos")]
         NativeSource::Keychain => "keychain",
+        NativeSource::Pkcs11 => "pkcs11",
     }
 }
 
@@ -140,7 +164,7 @@ pub(super) fn CertificatePicker(
     mut picker: Signal<Picker>,
     busy: Signal<bool>,
     spanish: bool,
-    on_change_source: EventHandler<()>,
+    on_selection_change: EventHandler<()>,
 ) -> Element {
     let state = picker.read();
     let source = state.source;
@@ -156,12 +180,12 @@ pub(super) fn CertificatePicker(
                     if busy() { return; }
                     let value = event.value();
                     let source = NativeSource::ALL.iter().copied()
-                        .find(|source| source_value(*source) == value);
-                    on_change_source.call(());
+                        .find(|source| source.is_configured() && source_value(*source) == value);
+                    on_selection_change.call(());
                     load(picker, busy, source);
                 },
                 option { value: "file", "PKCS#12 / PFX" }
-                for source in NativeSource::ALL.iter().copied() {
+                for source in NativeSource::ALL.iter().copied().filter(|source| source.is_configured()) {
                     option { key: "{source_value(source)}", value: source_value(source), {source_label(source, spanish)} }
                 }
             }
@@ -171,12 +195,15 @@ pub(super) fn CertificatePicker(
                 select { id: "sign-native-certificate", class: FIELD, value: selected,
                     disabled: busy() || state.entries.is_empty(),
                     onchange: move |event| {
-                        if !busy() { picker.write().select(&event.value()); }
+                        if !busy() {
+                            on_selection_change.call(());
+                            picker.write().select(&event.value());
+                        }
                     },
                     option { value: "", {tr(spanish, "Selecciona un certificado", "Select a certificate")} }
                     for (index, entry) in state.entries.iter().enumerate() {
                         option { key: "{generation}:{index}", value: "{generation}:{index}",
-                            disabled: entry.algorithm().is_none(),
+                            disabled: !entry.selectable(),
                             {entry.label(spanish)}
                         }
                     }
@@ -191,9 +218,11 @@ pub(super) fn CertificatePicker(
                         dd { class: "font-mono text-xs", {hex(entry.candidate.fingerprint())} }
                     }
                 }
-                p { class: "text-sm", {tr(spanish,
+                if source != NativeSource::Pkcs11 {
+                    p { class: "text-sm", {tr(spanish,
                     "El sistema puede solicitar autorización al firmar.",
                     "The system may ask for authorization when you sign.")}
+                    }
                 }
             }
             if busy() && state.entries.is_empty() {
@@ -206,14 +235,19 @@ pub(super) fn CertificatePicker(
                         {tr(spanish, "No se pudo leer el almacén de certificados.", "The certificate store could not be read.")}
                     }
                 }
-            } else if state.entries.iter().all(|entry| entry.algorithm().is_none()) {
+            } else if state.entries.iter().all(|entry| !entry.selectable()) {
                 p { role: "status", {tr(spanish,
                     "No hay certificados disponibles para firmar en este almacén.",
                     "This store has no certificates available for signing.")}
                 }
             }
             button { id: "sign-native-refresh", class: BUTTON, r#type: "button", disabled: busy(),
-                onclick: move |_| { if !busy() { load(picker, busy, Some(source)); } },
+                onclick: move |_| {
+                    if !busy() {
+                        on_selection_change.call(());
+                        load(picker, busy, Some(source));
+                    }
+                },
                 {tr(spanish, "Actualizar certificados", "Refresh certificates")}
             }
         }
@@ -250,7 +284,8 @@ fn load(mut picker: Signal<Picker>, mut busy: Signal<bool>, source: Option<Nativ
 fn entries(candidates: Vec<CertificateCandidate>, now: SystemTime) -> Vec<Entry> {
     let mut key_counts = HashMap::new();
     for candidate in &candidates {
-        if !candidate.capabilities().is_empty() {
+        if candidate.authentication() != Authentication::Pin && !candidate.capabilities().is_empty()
+        {
             *key_counts.entry(*candidate.fingerprint()).or_insert(0usize) += 1;
         }
     }
@@ -324,10 +359,10 @@ mod tests {
         picker.select("2:1");
         assert!(picker.selected().is_none());
         picker.select("2:0");
-        let (store, selected, algorithm) = picker.selected().unwrap();
+        let (store, selected) = picker.selected().unwrap();
         assert_eq!(store, NativeSource::ALL[0]);
         assert_eq!(selected.reference().key(), &[1]);
-        assert_eq!(algorithm, ALGORITHM);
+        assert_eq!(picker.algorithm(), Some(ALGORITHM));
     }
 
     #[test]
@@ -343,5 +378,40 @@ mod tests {
         picker.select("0:1");
         assert!(picker.selected().is_none());
         assert!(picker.entries.iter().all(|entry| entry.duplicate));
+    }
+
+    #[test]
+    fn picker_keeps_pkcs11_references_distinct_before_mechanism_discovery() {
+        let time = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let candidates = [
+            b"pkcs11:token=A;serial=01;id=%FF;type=cert".as_slice(),
+            b"pkcs11:token=B;serial=02;id=%FF;type=cert".as_slice(),
+        ]
+        .into_iter()
+        .map(|uri| {
+            CertificateCandidate::new(
+                IdentityReference::new(ProviderId::new("synthetic"), uri.to_vec()),
+                CertificateIdentity {
+                    certificate_der: CERTIFICATE.to_vec(),
+                    additional_certificates: vec![],
+                },
+                vec![],
+                Authentication::Pin,
+                Availability::Locked,
+            )
+        })
+        .collect();
+        let mut picker = Picker {
+            source: Some(NativeSource::Pkcs11),
+            entries: entries(candidates, time),
+            ..Default::default()
+        };
+        picker.select("0:1");
+        assert!(picker.has_selection());
+        assert_eq!(picker.algorithm(), None);
+        let (_, selected) = picker.selected().unwrap();
+        assert!(Pkcs11Provider::selection_label(&selected)
+            .unwrap()
+            .starts_with("B · 02"));
     }
 }
