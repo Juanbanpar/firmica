@@ -2172,11 +2172,14 @@ name = "firmica-providers"
 version = "0.1.0"
 dependencies = [
  "firmica-certificates",
+ "firmica-core",
  "firmica-key-worker",
  "firmica-signing",
+ "openssl",
  "secrecy",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -30,6 +30,12 @@ In the algorithm column, **RSA** means RSA PKCS#1 v1.5 with SHA-256 and a modulu
 
 Desktop PKCS#12/PFX uses the provider registry and a worker-backed session. The selected file bytes, certificate and key reference are fixed through review. Synthetic provider tests cover duplicate names, stale references, capability changes, cancellation, concurrent sessions and release failures. Desktop tests verify worker cleanup and RSA/P-256 signatures in CAdES with OpenSSL, and on Linux in PAdES with Poppler and XAdES with XMLSec.
 
+## Windows provider backend
+
+Firmica's provider API opens the Current User and Local Machine personal stores read-only. It also enumerates the Current User address book, intermediate and root stores for public-certificate inspection. Candidate discovery reads certificate and persisted key-provider metadata without acquiring a key. Signing rechecks the selected leaf and provider reference, then acquires and releases the native key on the signing thread. It verifies the resulting signature against the reviewed certificate before returning it.
+
+The initial profiles are RSA through CAPI or CNG and P-256 through CNG. Windows CI exercises the Microsoft Enhanced RSA and AES CSP and Microsoft Software Key Storage Provider with synthetic user-scoped, non-exportable keys. Desktop certificate selection and physical minidriver or hardware KSP verification remain pending.
+
 ## Specialized smart cards
 
 The pinned [AutoFirma dependency file][pom] selects JMulticard 2.1. The [Java driver dispatch][java-card], [preferred adapter registration][preferred-cards] and [known middleware list][known-cards] identify code paths, not a record of successful signing. No physical-card combinations are verified in Firmica at this baseline. For each claim, record the card generation, reader, middleware or driver version, OS and architecture, certificate role, algorithm, and signing result.

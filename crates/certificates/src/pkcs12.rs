@@ -12,7 +12,9 @@ use openssl::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::{algorithm, digest, verify, CertificateError, MAX_PKCS12_BYTES};
+use crate::{
+    digest, signature_algorithm, verify_sha256_signature, CertificateError, MAX_PKCS12_BYTES,
+};
 
 /// An unlocked PKCS#12 identity. Dropping it releases the OpenSSL-owned private key.
 ///
@@ -79,7 +81,7 @@ impl Pkcs12Key {
         if !key.public_eq(&public) {
             return Err(CertificateError::KeyMismatch);
         }
-        let algorithm = algorithm(&public)?;
+        let algorithm = signature_algorithm(&public)?;
         let identity = CertificateIdentity {
             certificate_der: certificate
                 .to_der()
@@ -141,7 +143,7 @@ impl SigningKey for Pkcs12Key {
             Ok::<_, openssl::error::ErrorStack>(signature)
         };
         let value = produce().map_err(|_| SigningError::BackendFailure)?;
-        verify(&self.certificate, algorithm, &digest, &value)?;
+        verify_sha256_signature(&self.certificate, algorithm, &digest, &value)?;
         Ok(Signature { algorithm, value })
     }
 }
