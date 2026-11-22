@@ -16,5 +16,15 @@ thiserror.workspace = true
 openssl.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+openssl.workspace = true
+security-framework = "3.7.0"
+security-framework-sys = "2.17.0"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+firmica-core.workspace = true
+tempfile = "3"
+
 [target.'cfg(windows)'.dev-dependencies]
 firmica-core.workspace = true

@@ -134,6 +134,9 @@ jobs:
       - name: Test Windows certificate stores and native signing
         if: runner.os == 'Windows'
         run: cargo +stable test --locked -p firmica-providers
+      - name: Test macOS Keychain discovery and native signing
+        if: runner.os == 'macOS' && !matrix.package_only
+        run: cargo +stable test --locked -p firmica-providers
       - name: Verify macOS worker pipe deadlines and cleanup
         if: runner.os == 'macOS' && !matrix.package_only
         run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
@@ -170,17 +173,17 @@ jobs:
         if: '!matrix.package_only'
         env:
           WORKER_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
-          FIRMICA_TEST_WINDOWS_SIGNATURES: ${{ runner.os == 'Windows' && format('{0}/firmica-windows-signatures', runner.temp) || '' }}
+          FIRMICA_TEST_NATIVE_SIGNATURES: ${{ runner.os != 'Linux' && format('{0}/firmica-native-signatures', runner.temp) || '' }}
         shell: bash
         run: |
           cargo +stable build --locked -p firmica-key-worker
           FIRMICA_TEST_WORKER="$GITHUB_WORKSPACE/target/debug/firmica-key-worker$WORKER_SUFFIX" cargo +stable test --locked -p desktop -- --ignored --test-threads=1
-      - name: Save Windows synthetic signatures for independent verification
-        if: runner.os == 'Windows'
+      - name: Save native store signature fixtures for independent verification
+        if: runner.os != 'Linux' && !matrix.package_only
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-signature-fixtures
-          path: ${{ runner.temp }}/firmica-windows-signatures/
+          name: ${{ runner.os == 'Windows' && 'windows-signature-fixtures' || 'macos-signature-fixtures' }}
+          path: ${{ runner.temp }}/firmica-native-signatures/
           if-no-files-found: error
       - name: Lint application packages
         if: runner.os == 'Linux'

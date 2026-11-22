@@ -1,108 +1,20 @@
 use super::*;
+use crate::signing::native::NativeSource;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use firmica_providers::windows::SystemStore;
-use openssl::cms::{CMSOptions, CmsContentInfo};
 
-const STORE: SystemStore = SystemStore::CurrentUserPersonal;
+const STORE: NativeSource = NativeSource::CurrentUser;
 
 #[test]
 #[ignore = "creates and removes synthetic keys and certificates in the Windows Current User MY store"]
 fn windows_selection_reviews_and_saves_with_native_keys() {
-    let pdf = include_bytes!("../../../../../crates/pades/tests/fixtures/document.pdf");
     for (algorithm, legacy) in [(RSA, false), (EC, false), (RSA, true)] {
         let (mut fixture, der) = CertificateFixture::new(algorithm, legacy);
-        let candidate = crate::signing::windows::discover(STORE)
-            .unwrap()
-            .into_iter()
-            .find(|candidate| candidate.identity().certificate_der == der)
-            .expect("synthetic certificate must be listed by its exact DER");
-        assert_eq!(candidate.capabilities()[0].algorithm, algorithm);
-
-        let evidence = std::env::var_os("FIRMICA_TEST_WINDOWS_SIGNATURES")
-            .filter(|path| !path.is_empty())
-            .map(|path| {
-                let profile = match (algorithm, legacy) {
-                    (RSA, true) => "capi-rsa",
-                    (RSA, false) => "cng-rsa",
-                    (EC, _) => "cng-p256",
-                };
-                let path = PathBuf::from(path).join(profile);
-                fs::create_dir_all(&path).unwrap();
-                let certificate = X509::from_der(&der).unwrap().to_pem().unwrap();
-                fs::write(path.join("certificate.pem"), certificate).unwrap();
-                path
-            });
-
-        let directory = tempfile::tempdir().unwrap();
-        let input = directory.path().join("document");
-        let cancelled = AtomicBool::new(false);
-        for (format, document) in [
-            (Format::Cades(ContentMode::Attached), DOCUMENT),
-            (Format::Pades(PdfOptions::default()), pdf.as_slice()),
-            (Format::Xades(XmlMode::Enveloped), b"<document/>".as_slice()),
-        ] {
-            fs::write(&input, document).unwrap();
-            let pending =
-                Prepared::open_windows(&input, STORE, &candidate, algorithm, format.clone())
-                    .unwrap();
-            assert_eq!(pending.windows_store(), Some(STORE));
-            assert_eq!(
-                pending.review().certificate().fingerprint(),
-                candidate.fingerprint()
-            );
-            assert_eq!(pending.review().algorithm(), algorithm);
-            assert_eq!(pending.review().format(), &format);
-            fs::write(&input, b"changed after review").unwrap();
-
-            let target = directory
-                .path()
-                .join(format!("signature.{}", format.extension()));
-            pending.sign_and_save(&target, &cancelled).unwrap();
-            let bytes = fs::read(&target).unwrap();
-            if let Some(path) = &evidence {
-                fs::write(path.join(target.file_name().unwrap()), &bytes).unwrap();
-            }
-            match format {
-                Format::Cades(_) => {
-                    let mut signature = CmsContentInfo::from_der(&bytes).unwrap();
-                    let mut content = Vec::new();
-                    signature
-                        .verify(
-                            None,
-                            None,
-                            None,
-                            Some(&mut content),
-                            CMSOptions::NO_SIGNER_CERT_VERIFY,
-                        )
-                        .unwrap();
-                    assert_eq!(content, DOCUMENT);
-                }
-                Format::Pades(_) => assert!(bytes.starts_with(pdf) && bytes.len() > pdf.len()),
-                Format::Xades(_) => assert!(String::from_utf8(bytes)
-                    .unwrap()
-                    .contains("<ds:SignatureValue>")),
-            }
-        }
-
-        let cancelled_output = directory.path().join("cancelled.csig");
-        let format = Format::Cades(ContentMode::Attached);
-        assert!(matches!(
-            Prepared::open_windows(&input, STORE, &candidate, algorithm, format.clone())
-                .unwrap()
-                .sign_and_save(&cancelled_output, &AtomicBool::new(true)),
-            Err(Error::Cancelled)
-        ));
-        assert!(!cancelled_output.exists());
-        let pending =
-            Prepared::open_windows(&input, STORE, &candidate, algorithm, format.clone()).unwrap();
-        fixture.remove();
-        let stale_output = directory.path().join("stale.csig");
-        assert!(pending.sign_and_save(&stale_output, &cancelled).is_err());
-        assert!(!stale_output.exists());
-        assert!(matches!(
-            Prepared::open_windows(&input, STORE, &candidate, algorithm, format),
-            Err(Error::Provider(firmica_providers::Error::StaleIdentity))
-        ));
+        let profile = match (algorithm, legacy) {
+            (RSA, true) => "capi-rsa",
+            (RSA, false) => "cng-rsa",
+            (EC, _) => "cng-p256",
+        };
+        super::native_store::exercise(STORE, algorithm, profile, &der, || fixture.remove());
     }
 }
 

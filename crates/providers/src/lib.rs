@@ -8,6 +8,8 @@
 #![deny(missing_docs)]
 
 mod candidate;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod pkcs12;
 mod registry;
 mod session;

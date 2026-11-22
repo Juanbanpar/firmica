@@ -1224,6 +1224,7 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "clap",
+ "core-foundation",
  "der",
  "dioxus",
  "firmica-core",
@@ -1236,6 +1237,8 @@ dependencies = [
  "rfd",
  "rustix",
  "secrecy",
+ "security-framework",
+ "security-framework-sys",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2171,13 +2174,17 @@ dependencies = [
 name = "firmica-providers"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
  "firmica-certificates",
  "firmica-core",
  "firmica-key-worker",
  "firmica-signing",
  "openssl",
  "secrecy",
+ "security-framework",
+ "security-framework-sys",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
 ]

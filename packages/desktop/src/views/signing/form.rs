@@ -15,8 +15,8 @@ pub(super) struct Inputs {
     pub(super) password_generation: Signal<u64>,
     pub(super) algorithm: Signal<SignatureAlgorithm>,
     pub(super) format: Signal<Format>,
-    #[cfg(windows)]
-    pub(super) windows_certificates: Signal<super::windows::Picker>,
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(super) native_certificates: Signal<super::native::Picker>,
 }
 
 #[component]
@@ -34,28 +34,28 @@ pub(super) fn SigningForm(
         password_generation,
         mut algorithm,
         mut format,
-        #[cfg(windows)]
-        windows_certificates,
+        #[cfg(any(windows, target_os = "macos"))]
+        native_certificates,
     } = inputs;
-    #[cfg(windows)]
-    let use_pkcs12 = external || windows_certificates.read().store().is_none();
-    #[cfg(not(windows))]
+    #[cfg(any(windows, target_os = "macos"))]
+    let use_pkcs12 = external || native_certificates.read().source().is_none();
+    #[cfg(not(any(windows, target_os = "macos")))]
     let use_pkcs12 = true;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let native_algorithm = if use_pkcs12 {
         None
     } else {
-        windows_certificates.read().algorithm()
+        native_certificates.read().algorithm()
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let native_algorithm: Option<SignatureAlgorithm> = None;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let sources = {
         let mut generation = password_generation;
         rsx! {
             if !external {
-                super::windows::CertificatePicker {
-                    picker: windows_certificates, busy, spanish,
+                super::native::CertificatePicker {
+                    picker: native_certificates, busy, spanish,
                     on_change_source: move |_| {
                         password.set(SecretString::default());
                         *generation.write() += 1;
@@ -64,7 +64,7 @@ pub(super) fn SigningForm(
             }
         }
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let sources = rsx! {};
     let certificate_ready = if use_pkcs12 {
         certificate.read().is_some()
