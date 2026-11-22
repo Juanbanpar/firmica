@@ -338,11 +338,7 @@ impl TestKey {
             pwszContainerName: self.name.as_ptr().cast_mut(),
             pwszProvName: self.provider_name.cast_mut(),
             dwProvType: if legacy { PROV_RSA_AES } else { 0 },
-            dwKeySpec: if legacy {
-                AT_SIGNATURE
-            } else {
-                CERT_NCRYPT_KEY_SPEC
-            },
+            dwKeySpec: if legacy { AT_SIGNATURE } else { 0 },
             ..Default::default()
         }
     }
