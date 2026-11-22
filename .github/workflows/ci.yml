@@ -134,6 +134,9 @@ jobs:
       - name: Test Windows certificate stores and native signing
         if: runner.os == 'Windows'
         run: cargo +stable test --locked -p firmica-providers
+      - name: Test macOS Keychain discovery and native signing
+        if: runner.os == 'macOS' && !matrix.package_only
+        run: cargo +stable test --locked -p firmica-providers
       - name: Verify macOS worker pipe deadlines and cleanup
         if: runner.os == 'macOS' && !matrix.package_only
         run: cargo +stable test --locked -p firmica-key-worker --test worker -- --ignored
