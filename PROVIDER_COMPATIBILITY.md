@@ -34,7 +34,15 @@ Desktop PKCS#12/PFX uses the provider registry and a worker-backed session. The 
 
 Firmica's provider API opens the Current User and Local Machine personal stores read-only. It also enumerates the Current User address book, intermediate and root stores for public-certificate inspection. Candidate discovery reads certificate and persisted key-provider metadata without acquiring a key. Signing rechecks the selected leaf and provider reference, then acquires and releases the native key on the signing thread. It verifies the resulting signature against the reviewed certificate before returning it.
 
-The initial profiles are RSA through CAPI or CNG and P-256 through CNG. Windows CI exercises the Microsoft Enhanced RSA and AES CSP and Microsoft Software Key Storage Provider with synthetic user-scoped, non-exportable keys. Desktop certificate selection and physical minidriver or hardware KSP verification remain pending.
+The initial profiles are RSA through CAPI or CNG and P-256 through CNG. Windows CI exercises the Microsoft Enhanced RSA and AES CSP and Microsoft Software Key Storage Provider with synthetic user-scoped, non-exportable keys. The Windows desktop offers both personal stores alongside PKCS#12. Refresh clears the certificate selection, and a review freezes the source, certificate, algorithm and document. The desktop integration test selects synthetic keys from the Current User personal store, verifies saved CAdES with OpenSSL, exercises saving PAdES and XAdES, and checks that cancellation and removal after review produce no output. The separate native backend tests cover keys removed while their certificates remain installed. The Windows CI artifact contains only synthetic signatures and public certificates for independent verification.
+
+### Windows hardware checks
+
+Physical smart cards and hardware KSPs require manual verification. Use a standard user account and record the Windows build, architecture, store, device and card generation, reader, middleware or minidriver version, CSP or KSP, certificate role and algorithm for each result.
+
+- Discover and refresh with the device present and absent. Check that browsing the store and opening review never display a PIN prompt. Confirm that the document-signing identity is distinguishable from any authentication certificate and that the latter cannot be used when its policy prohibits document signing.
+- Approve signing and observe provider authorization on each supported path. Verify CAdES, PAdES and XAdES output against the selected certificate with an independent verifier. Check that a machine-store key works only when its existing key permissions allow the current user to use it.
+- Cancel review, dismiss provider authorization, and request **Stop operation** while the provider is prompting. Dismiss the native dialog if it remains open. Remove the device between review and signing and during authorization. Confirm that none of these cases publishes a signature, and that a new selection works after reinsertion and refresh.
 
 ## Specialized smart cards
 

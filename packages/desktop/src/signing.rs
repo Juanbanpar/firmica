@@ -20,6 +20,9 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::File;
 
+#[cfg(windows)]
+pub mod windows;
+
 #[derive(Debug)]
 pub enum Error {
     ReadInput,
@@ -88,10 +91,12 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
     Ok(path)
 }
 
-/// Opaque, single-use imported key and frozen review. No Clone/Debug implementation.
+/// Opaque, single-use signing session and frozen review. No Clone/Debug implementation.
 pub struct Prepared {
     session: Option<SigningSession>,
     review: Option<SigningReview>,
+    #[cfg(windows)]
+    windows_store: Option<firmica_providers::windows::SystemStore>,
 }
 
 impl Prepared {
@@ -103,13 +108,7 @@ impl Prepared {
         algorithm: SignatureAlgorithm,
         format: impl Into<Format>,
     ) -> Result<Self, Error> {
-        let mut content = read_bounded(document, MAX_CONTENT_BYTES)?;
-        let name = document
-            .file_name()
-            .ok_or(Error::ReadInput)?
-            .to_string_lossy()
-            .into_owned();
-        let document = std::mem::take(content.expose_secret_mut());
+        let (name, document) = read_document(document)?;
         Self::open_document(
             executable, name, document, container, password, algorithm, format,
         )
@@ -155,6 +154,8 @@ impl Prepared {
             Ok(review) => Ok(Self {
                 session: Some(session),
                 review: Some(review),
+                #[cfg(windows)]
+                windows_store: None,
             }),
             Err(error) => {
                 session.close().map_err(Error::Provider)?;
@@ -231,6 +232,16 @@ impl Drop for Prepared {
             });
         }
     }
+}
+
+fn read_document(path: &Path) -> Result<(String, Vec<u8>), Error> {
+    let mut content = read_bounded(path, MAX_CONTENT_BYTES)?;
+    let name = path
+        .file_name()
+        .ok_or(Error::ReadInput)?
+        .to_string_lossy()
+        .into_owned();
+    Ok((name, std::mem::take(content.expose_secret_mut())))
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<SecretBox<Vec<u8>>, Error> {

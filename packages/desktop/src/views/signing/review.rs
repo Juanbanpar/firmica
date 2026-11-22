@@ -11,6 +11,7 @@ pub(super) struct Details {
     name: String,
     size: usize,
     hash: String,
+    source: &'static str,
     subject: String,
     issuer: String,
     serial: String,
@@ -22,12 +23,13 @@ pub(super) struct Details {
 }
 
 impl Details {
-    pub(super) fn from_review(review: &SigningReview) -> Self {
+    pub(super) fn from_review(review: &SigningReview, source: &'static str) -> Self {
         let certificate = review.certificate();
         Self {
             name: review.document_name().to_owned(),
             size: review.document_size(),
             hash: hex(review.document_hash()),
+            source,
             subject: certificate.subject().to_owned(),
             issuer: certificate.issuer().to_owned(),
             serial: hex(certificate.serial()),
@@ -54,6 +56,7 @@ pub(super) fn Review(
         name,
         size,
         hash,
+        source,
         subject,
         issuer,
         serial,
@@ -69,6 +72,7 @@ pub(super) fn Review(
                 dt { {tr(spanish, "Documento", "Document")} } dd { id: "sign-document-name", "{name}" }
                 dt { {tr(spanish, "Tamaño", "Size")} } dd { "{size} bytes" }
                 dt { "SHA-256" } dd { id: "sign-document-hash", class: "font-mono text-xs", "{hash}" }
+                dt { {tr(spanish, "Origen del certificado", "Certificate source")} } dd { id: "sign-review-source", "{source}" }
                 dt { {tr(spanish, "Titular declarado", "Claimed subject")} } dd { id: "sign-subject", "{subject}" }
                 dt { {tr(spanish, "Emisor declarado", "Claimed issuer")} } dd { "{issuer}" }
                 dt { {tr(spanish, "Número de serie", "Serial number")} } dd { class: "font-mono text-sm", "{serial}" }
@@ -114,7 +118,7 @@ pub(super) fn Review(
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 fn date(time: std::time::SystemTime) -> String {
