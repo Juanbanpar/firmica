@@ -105,12 +105,12 @@ pub fn LocalSigning(
 
     let details = prepared.read().as_ref().map(|pending| {
         #[cfg(windows)]
-        let source = pending
-            .windows_store()
-            .map(|store| windows::store_label(store, spanish));
+        let source = pending.windows_store().map_or("PKCS#12 / PFX", |store| {
+            windows::store_label(store, spanish)
+        });
         #[cfg(not(windows))]
-        let source = None;
-        Details::from_review(pending.review(), source.unwrap_or("PKCS#12 / PFX"))
+        let source = "PKCS#12 / PFX";
+        Details::from_review(pending.review(), source)
     });
     let text = status.read().text(external, spanish);
     let failed = matches!(&*status.read(), Status::Failed(_));
