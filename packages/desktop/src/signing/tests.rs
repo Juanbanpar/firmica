@@ -217,7 +217,10 @@ fn inherited_acl_access_prevents_signature_publication() {
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
-fn fixture(directory: &Path, algorithm: SignatureAlgorithm, ca: bool) -> X509 {
+fn synthetic_identity(
+    algorithm: SignatureAlgorithm,
+    ca: bool,
+) -> (PKey<openssl::pkey::Private>, X509) {
     let key = match algorithm {
         RSA => PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap(),
         EC => PKey::from_ec_key(
@@ -261,7 +264,11 @@ fn fixture(directory: &Path, algorithm: SignatureAlgorithm, ca: bool) -> X509 {
         .append_extension(constraints.build().unwrap())
         .unwrap();
     builder.sign(&key, MessageDigest::sha256()).unwrap();
-    let certificate = builder.build();
+    (key, builder.build())
+}
+
+fn fixture(directory: &Path, algorithm: SignatureAlgorithm, ca: bool) -> X509 {
+    let (key, certificate) = synthetic_identity(algorithm, ca);
     let container = Pkcs12::builder()
         .pkey(&key)
         .cert(&certificate)
@@ -661,3 +668,8 @@ fn windows_device_and_pipe_paths_are_rejected_before_opening() {
 
 #[cfg(windows)]
 mod windows_store;
+
+#[cfg(target_os = "macos")]
+mod macos_keychain;
+#[cfg(any(windows, target_os = "macos"))]
+mod native_store;

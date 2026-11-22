@@ -2,20 +2,23 @@ use super::{
     review::{algorithm_name, hex},
     tr, BUTTON, FIELD,
 };
-use crate::signing::windows::discover;
+use crate::signing::{
+    native::{discover, NativeSource},
+    Error,
+};
 use dioxus::prelude::*;
-use firmica_providers::{windows::SystemStore, Availability, CertificateCandidate};
+use firmica_providers::{Availability, CertificateCandidate, Error as ProviderError};
 use firmica_signing::SignatureAlgorithm;
 use firmica_validation::{assess_document_signing, CertificateAssessment};
 use std::{collections::HashMap, time::SystemTime};
 
 #[derive(Default)]
 pub(super) struct Picker {
-    store: Option<SystemStore>,
+    source: Option<NativeSource>,
     generation: u64,
     entries: Vec<Entry>,
     selected: Option<usize>,
-    load_failed: bool,
+    load_error: Option<Error>,
 }
 
 struct Entry {
@@ -72,15 +75,15 @@ impl Entry {
 }
 
 impl Picker {
-    pub(super) fn store(&self) -> Option<SystemStore> {
-        self.store
+    pub(super) fn source(&self) -> Option<NativeSource> {
+        self.source
     }
 
     pub(super) fn selected(
         &self,
-    ) -> Option<(SystemStore, CertificateCandidate, SignatureAlgorithm)> {
+    ) -> Option<(NativeSource, CertificateCandidate, SignatureAlgorithm)> {
         let entry = self.entries.get(self.selected?)?;
-        Some((self.store?, entry.candidate.clone(), entry.algorithm()?))
+        Some((self.source?, entry.candidate.clone(), entry.algorithm()?))
     }
 
     pub(super) fn algorithm(&self) -> Option<SignatureAlgorithm> {
@@ -104,17 +107,31 @@ impl Picker {
     }
 }
 
-pub(super) fn store_label(store: SystemStore, spanish: bool) -> &'static str {
-    match store {
-        SystemStore::CurrentUserPersonal => tr(
+pub(super) fn source_label(source: NativeSource, spanish: bool) -> &'static str {
+    match source {
+        #[cfg(windows)]
+        NativeSource::CurrentUser => tr(
             spanish,
             "Windows · Usuario actual",
             "Windows · Current User",
         ),
-        SystemStore::LocalMachinePersonal => {
+        #[cfg(windows)]
+        NativeSource::LocalMachine => {
             tr(spanish, "Windows · Equipo local", "Windows · Local Machine")
         }
-        _ => "Windows",
+        #[cfg(target_os = "macos")]
+        NativeSource::Keychain => tr(spanish, "Llavero de macOS", "macOS Keychain"),
+    }
+}
+
+fn source_value(source: NativeSource) -> &'static str {
+    match source {
+        #[cfg(windows)]
+        NativeSource::CurrentUser => "user",
+        #[cfg(windows)]
+        NativeSource::LocalMachine => "machine",
+        #[cfg(target_os = "macos")]
+        NativeSource::Keychain => "keychain",
     }
 }
 
@@ -126,38 +143,32 @@ pub(super) fn CertificatePicker(
     on_change_source: EventHandler<()>,
 ) -> Element {
     let state = picker.read();
-    let store = state.store;
+    let source = state.source;
     let generation = state.generation;
     let selected = state
         .selected
         .map(|index| format!("{generation}:{index}"))
         .unwrap_or_default();
-    let source = match store {
-        Some(SystemStore::CurrentUserPersonal) => "user",
-        Some(SystemStore::LocalMachinePersonal) => "machine",
-        _ => "file",
-    };
     rsx! {
         label { class: "block", {tr(spanish, "Origen del certificado", "Certificate source")}
-            select { id: "sign-certificate-source", class: FIELD, value: source, disabled: busy(),
+            select { id: "sign-certificate-source", class: FIELD, value: source.map_or("file", source_value), disabled: busy(),
                 onchange: move |event| {
                     if busy() { return; }
-                    let store = match event.value().as_str() {
-                        "user" => Some(SystemStore::CurrentUserPersonal),
-                        "machine" => Some(SystemStore::LocalMachinePersonal),
-                        _ => None,
-                    };
+                    let value = event.value();
+                    let source = NativeSource::ALL.iter().copied()
+                        .find(|source| source_value(*source) == value);
                     on_change_source.call(());
-                    load(picker, busy, store);
+                    load(picker, busy, source);
                 },
                 option { value: "file", "PKCS#12 / PFX" }
-                option { value: "user", {store_label(SystemStore::CurrentUserPersonal, spanish)} }
-                option { value: "machine", {store_label(SystemStore::LocalMachinePersonal, spanish)} }
+                for source in NativeSource::ALL.iter().copied() {
+                    option { key: "{source_value(source)}", value: source_value(source), {source_label(source, spanish)} }
+                }
             }
         }
-        if let Some(store) = store {
-            label { class: "block", {tr(spanish, "Certificado de Windows", "Windows certificate")}
-                select { id: "sign-windows-certificate", class: FIELD, value: selected,
+        if let Some(source) = source {
+            label { class: "block", {tr(spanish, "Certificado", "Certificate")}
+                select { id: "sign-native-certificate", class: FIELD, value: selected,
                     disabled: busy() || state.entries.is_empty(),
                     onchange: move |event| {
                         if !busy() { picker.write().select(&event.value()); }
@@ -181,16 +192,19 @@ pub(super) fn CertificatePicker(
                     }
                 }
                 p { class: "text-sm", {tr(spanish,
-                    "Windows puede solicitar autorización al firmar.",
-                    "Windows may ask for authorization when you sign.")}
+                    "El sistema puede solicitar autorización al firmar.",
+                    "The system may ask for authorization when you sign.")}
                 }
             }
             if busy() && state.entries.is_empty() {
                 p { role: "status", {tr(spanish, "Cargando certificados…", "Loading certificates…")} }
-            } else if state.load_failed {
-                p { role: "alert", {tr(spanish,
-                    "No se pudo leer el almacén de Windows.",
-                    "The Windows certificate store could not be read.")}
+            } else if let Some(error) = &state.load_error {
+                p { role: "alert",
+                    if matches!(error, Error::Provider(ProviderError::AuthenticationRequired)) {
+                        {tr(spanish, "Desbloquea el almacén de certificados y actualiza la lista.", "Unlock the certificate store and refresh the list.")}
+                    } else {
+                        {tr(spanish, "No se pudo leer el almacén de certificados.", "The certificate store could not be read.")}
+                    }
                 }
             } else if state.entries.iter().all(|entry| entry.algorithm().is_none()) {
                 p { role: "status", {tr(spanish,
@@ -198,34 +212,35 @@ pub(super) fn CertificatePicker(
                     "This store has no certificates available for signing.")}
                 }
             }
-            button { id: "sign-windows-refresh", class: BUTTON, r#type: "button", disabled: busy(),
-                onclick: move |_| { if !busy() { load(picker, busy, Some(store)); } },
+            button { id: "sign-native-refresh", class: BUTTON, r#type: "button", disabled: busy(),
+                onclick: move |_| { if !busy() { load(picker, busy, Some(source)); } },
                 {tr(spanish, "Actualizar certificados", "Refresh certificates")}
             }
         }
     }
 }
 
-fn load(mut picker: Signal<Picker>, mut busy: Signal<bool>, store: Option<SystemStore>) {
+fn load(mut picker: Signal<Picker>, mut busy: Signal<bool>, source: Option<NativeSource>) {
     let generation = picker.peek().generation.wrapping_add(1);
     picker.set(Picker {
-        store,
+        source,
         generation,
         ..Default::default()
     });
-    let Some(store) = store else {
+    let Some(source) = source else {
         return;
     };
     busy.set(true);
     spawn(async move {
         let entries = tokio::task::spawn_blocking(move || {
-            discover(store).map(|certificates| entries(certificates, SystemTime::now()))
+            discover(source).map(|certificates| entries(certificates, SystemTime::now()))
         })
         .await;
         let mut state = picker.write();
         match entries {
             Ok(Ok(entries)) => state.entries = entries,
-            _ => state.load_failed = true,
+            Ok(Err(error)) => state.load_error = Some(error),
+            Err(_) => state.load_error = Some(Error::Task),
         }
         drop(state);
         busy.set(false);
@@ -299,7 +314,7 @@ mod tests {
     fn picker_rejects_previous_generations_and_public_only_rows() {
         let time = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
         let mut picker = Picker {
-            store: Some(SystemStore::CurrentUserPersonal),
+            source: Some(NativeSource::ALL[0]),
             generation: 2,
             entries: entries(vec![candidate(1, true), candidate(2, false)], time),
             ..Default::default()
@@ -310,7 +325,7 @@ mod tests {
         assert!(picker.selected().is_none());
         picker.select("2:0");
         let (store, selected, algorithm) = picker.selected().unwrap();
-        assert_eq!(store, SystemStore::CurrentUserPersonal);
+        assert_eq!(store, NativeSource::ALL[0]);
         assert_eq!(selected.reference().key(), &[1]);
         assert_eq!(algorithm, ALGORITHM);
     }
@@ -319,7 +334,7 @@ mod tests {
     fn picker_rejects_indistinguishable_signing_rows() {
         let time = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
         let mut picker = Picker {
-            store: Some(SystemStore::CurrentUserPersonal),
+            source: Some(NativeSource::ALL[0]),
             entries: entries(vec![candidate(1, true), candidate(2, true)], time),
             ..Default::default()
         };

@@ -16,9 +16,9 @@ use std::{
 mod browser;
 mod form;
 mod messages;
+#[cfg(any(windows, target_os = "macos"))]
+mod native;
 mod review;
-#[cfg(windows)]
-mod windows;
 
 use browser::{browser_reply, finish_browser, BrowserConsent, RequestSummary};
 use form::{file_dialog, Inputs, SigningForm};
@@ -30,9 +30,9 @@ const FIELD: &str = "mt-2 block w-full rounded border bg-transparent px-3 py-2";
 
 enum CertificateInput {
     Pkcs12(PathBuf, SecretString),
-    #[cfg(windows)]
-    Windows(
-        firmica_providers::windows::SystemStore,
+    #[cfg(any(windows, target_os = "macos"))]
+    Native(
+        crate::signing::native::NativeSource,
         firmica_providers::CertificateCandidate,
         SignatureAlgorithm,
     ),
@@ -48,8 +48,8 @@ pub fn LocalSigning(
     let mut certificate = use_signal(|| None::<PathBuf>);
     let mut password = use_signal(SecretString::default);
     let mut password_generation = use_signal(|| 0_u64);
-    #[cfg(windows)]
-    let mut windows_certificates = use_signal(windows::Picker::default);
+    #[cfg(any(windows, target_os = "macos"))]
+    let mut native_certificates = use_signal(native::Picker::default);
     let algorithm = use_signal(|| SignatureAlgorithm::RsaPkcs1v15Sha256);
     let format = use_signal(|| Format::Cades(ContentMode::Detached));
     let mut prepared = use_signal(|| None::<Prepared>);
@@ -104,11 +104,11 @@ pub fn LocalSigning(
     let reject_cancellation = cancelled.clone();
 
     let details = prepared.read().as_ref().map(|pending| {
-        #[cfg(windows)]
-        let source = pending.windows_store().map_or("PKCS#12 / PFX", |store| {
-            windows::store_label(store, spanish)
+        #[cfg(any(windows, target_os = "macos"))]
+        let source = pending.native_source().map_or("PKCS#12 / PFX", |store| {
+            native::source_label(store, spanish)
         });
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let source = "PKCS#12 / PFX";
         Details::from_review(pending.review(), source)
     });
@@ -224,8 +224,8 @@ pub fn LocalSigning(
                         Ok(()) => {
                             document.set(None);
                             certificate.set(None);
-                            #[cfg(windows)]
-                            windows_certificates.write().clear_selection();
+                            #[cfg(any(windows, target_os = "macos"))]
+                            native_certificates.write().clear_selection();
                             Status::Saved
                         }
                         Err(Error::Cancelled) => Status::Cancelled,
@@ -294,18 +294,18 @@ pub fn LocalSigning(
             *password_generation.write() += 1;
             Some(CertificateInput::Pkcs12(path, secret))
         };
-        #[cfg(windows)]
-        let input = if !external && windows_certificates.peek().store().is_some() {
-            windows_certificates
+        #[cfg(any(windows, target_os = "macos"))]
+        let input = if !external && native_certificates.peek().source().is_some() {
+            native_certificates
                 .peek()
                 .selected()
-                .map(|(store, candidate, algorithm)| {
-                    CertificateInput::Windows(store, candidate, algorithm)
+                .map(|(source, candidate, algorithm)| {
+                    CertificateInput::Native(source, candidate, algorithm)
                 })
         } else {
             select_file()
         };
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let input = select_file();
         let Some(input) = input else {
             return;
@@ -342,10 +342,10 @@ pub fn LocalSigning(
                         )
                     }
                 }
-                #[cfg(windows)]
-                CertificateInput::Windows(store, candidate, algorithm) => Prepared::open_windows(
+                #[cfg(any(windows, target_os = "macos"))]
+                CertificateInput::Native(source, candidate, algorithm) => Prepared::open_native(
                     &document_path.ok_or(Error::ReadInput)?,
-                    store,
+                    source,
                     &candidate,
                     algorithm,
                     format,
@@ -409,8 +409,8 @@ pub fn LocalSigning(
                 SigningForm {
                     inputs: Inputs {
                         document, certificate, password, password_generation, algorithm, format,
-                        #[cfg(windows)]
-                        windows_certificates,
+                        #[cfg(any(windows, target_os = "macos"))]
+                        native_certificates,
                     },
                     spanish, external, busy, on_prepare: prepare,
                 }

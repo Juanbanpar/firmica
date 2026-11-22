@@ -20,8 +20,8 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::File;
 
-#[cfg(windows)]
-pub mod windows;
+#[cfg(any(windows, target_os = "macos"))]
+pub mod native;
 
 #[derive(Debug)]
 pub enum Error {
@@ -95,8 +95,8 @@ fn worker_beside(application: &Path) -> Result<PathBuf, Error> {
 pub struct Prepared {
     session: Option<SigningSession>,
     review: Option<SigningReview>,
-    #[cfg(windows)]
-    windows_store: Option<firmica_providers::windows::SystemStore>,
+    #[cfg(any(windows, target_os = "macos"))]
+    native_source: Option<native::NativeSource>,
 }
 
 impl Prepared {
@@ -154,8 +154,8 @@ impl Prepared {
             Ok(review) => Ok(Self {
                 session: Some(session),
                 review: Some(review),
-                #[cfg(windows)]
-                windows_store: None,
+                #[cfg(any(windows, target_os = "macos"))]
+                native_source: None,
             }),
             Err(error) => {
                 session.close().map_err(Error::Provider)?;
