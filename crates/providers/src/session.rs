@@ -17,6 +17,23 @@ pub trait ProviderKey: SigningKey + Send {
     /// signing, the backend must bind the actual operation to the checked key.
     fn revalidate(&mut self, reference: &IdentityReference) -> Result<(), Error>;
 
+    /// Sign if the caller is still active. Backends that acquire or authenticate
+    /// a key during signing can check cancellation again before invoking it.
+    ///
+    /// # Errors
+    /// Returns a signing error if cancelled or signing fails.
+    fn sign_if_active(
+        &mut self,
+        algorithm: SignatureAlgorithm,
+        input: SigningInput<'_>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Signature, SigningError> {
+        if cancelled() {
+            return Err(SigningError::BackendFailure);
+        }
+        self.sign(algorithm, input)
+    }
+
     /// Release the session and any native resources, consuming the opened handle.
     ///
     /// # Errors
@@ -97,10 +114,7 @@ impl SigningSession {
                 if !key.capabilities().contains(&capability) {
                     return Err(SigningError::UnsupportedOperation);
                 }
-                if cancelled() {
-                    return Err(SigningError::BackendFailure);
-                }
-                key.sign(algorithm, input)
+                key.sign_if_active(algorithm, input, &cancelled)
             });
         self.failed = result.is_err();
         result

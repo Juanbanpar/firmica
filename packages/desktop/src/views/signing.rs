@@ -17,6 +17,8 @@ mod browser;
 mod form;
 mod messages;
 mod review;
+#[cfg(windows)]
+mod windows;
 
 use browser::{browser_reply, finish_browser, BrowserConsent, RequestSummary};
 use form::{file_dialog, Inputs, SigningForm};
@@ -25,6 +27,16 @@ use review::{algorithm_name, Details, Review};
 
 const BUTTON: &str = "rounded border px-4 py-3 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4";
 const FIELD: &str = "mt-2 block w-full rounded border bg-transparent px-3 py-2";
+
+enum CertificateInput {
+    Pkcs12(PathBuf, SecretString),
+    #[cfg(windows)]
+    Windows(
+        firmica_providers::windows::SystemStore,
+        firmica_providers::CertificateCandidate,
+        SignatureAlgorithm,
+    ),
+}
 
 #[component]
 pub fn LocalSigning(
@@ -36,6 +48,8 @@ pub fn LocalSigning(
     let mut certificate = use_signal(|| None::<PathBuf>);
     let mut password = use_signal(SecretString::default);
     let mut password_generation = use_signal(|| 0_u64);
+    #[cfg(windows)]
+    let mut windows_certificates = use_signal(windows::Picker::default);
     let algorithm = use_signal(|| SignatureAlgorithm::RsaPkcs1v15Sha256);
     let format = use_signal(|| Format::Cades(ContentMode::Detached));
     let mut prepared = use_signal(|| None::<Prepared>);
@@ -89,10 +103,15 @@ pub fn LocalSigning(
     });
     let reject_cancellation = cancelled.clone();
 
-    let details = prepared
-        .read()
-        .as_ref()
-        .map(|pending| Details::from_review(pending.review()));
+    let details = prepared.read().as_ref().map(|pending| {
+        #[cfg(windows)]
+        let source = pending.windows_store().map_or("PKCS#12 / PFX", |store| {
+            windows::store_label(store, spanish)
+        });
+        #[cfg(not(windows))]
+        let source = "PKCS#12 / PFX";
+        Details::from_review(pending.review(), source)
+    });
     let text = status.read().text(external, spanish);
     let failed = matches!(&*status.read(), Status::Failed(_));
     let can_stop = matches!(&*status.read(), Status::Opening | Status::Signing);
@@ -205,6 +224,8 @@ pub fn LocalSigning(
                         Ok(()) => {
                             document.set(None);
                             certificate.set(None);
+                            #[cfg(windows)]
+                            windows_certificates.write().clear_selection();
                             Status::Saved
                         }
                         Err(Error::Cancelled) => Status::Cancelled,
@@ -250,9 +271,6 @@ pub fn LocalSigning(
         if busy() {
             return;
         }
-        let Some(certificate_path) = certificate.peek().clone() else {
-            return;
-        };
         let document_path = document.peek().clone();
         let inline = browser.and_then(|browser| {
             browser
@@ -270,8 +288,28 @@ pub fn LocalSigning(
         if external && inline.is_none() {
             return;
         }
-        let secret = std::mem::take(&mut *password.write());
-        *password_generation.write() += 1;
+        let mut select_file = || {
+            let path = certificate.peek().clone()?;
+            let secret = std::mem::take(&mut *password.write());
+            *password_generation.write() += 1;
+            Some(CertificateInput::Pkcs12(path, secret))
+        };
+        #[cfg(windows)]
+        let input = if !external && windows_certificates.peek().store().is_some() {
+            windows_certificates
+                .peek()
+                .selected()
+                .map(|(store, candidate, algorithm)| {
+                    CertificateInput::Windows(store, candidate, algorithm)
+                })
+        } else {
+            select_file()
+        };
+        #[cfg(not(windows))]
+        let input = select_file();
+        let Some(input) = input else {
+            return;
+        };
         let algorithm = algorithm();
         let format = format();
         open_cancellation.store(false, Ordering::Release);
@@ -280,28 +318,38 @@ pub fn LocalSigning(
         busy.set(true);
         status.set(Status::Opening);
         spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                let worker = packaged_worker()?;
-                if let Some((document, algorithm, format)) = inline {
-                    Prepared::open_document(
-                        &worker,
-                        "Browser document / Documento del navegador".into(),
-                        document,
-                        &certificate_path,
-                        secret,
-                        algorithm,
-                        format,
-                    )
-                } else {
-                    Prepared::open(
-                        &worker,
-                        &document_path.ok_or(Error::ReadInput)?,
-                        &certificate_path,
-                        secret,
-                        algorithm,
-                        format,
-                    )
+            let result = tokio::task::spawn_blocking(move || match input {
+                CertificateInput::Pkcs12(certificate_path, secret) => {
+                    let worker = packaged_worker()?;
+                    if let Some((document, algorithm, format)) = inline {
+                        Prepared::open_document(
+                            &worker,
+                            "Browser document / Documento del navegador".into(),
+                            document,
+                            &certificate_path,
+                            secret,
+                            algorithm,
+                            format,
+                        )
+                    } else {
+                        Prepared::open(
+                            &worker,
+                            &document_path.ok_or(Error::ReadInput)?,
+                            &certificate_path,
+                            secret,
+                            algorithm,
+                            format,
+                        )
+                    }
                 }
+                #[cfg(windows)]
+                CertificateInput::Windows(store, candidate, algorithm) => Prepared::open_windows(
+                    &document_path.ok_or(Error::ReadInput)?,
+                    store,
+                    &candidate,
+                    algorithm,
+                    format,
+                ),
             })
             .await
             .unwrap_or(Err(Error::Task));
@@ -359,7 +407,11 @@ pub fn LocalSigning(
                 Review { details, spanish, external, busy: busy(), acknowledged, on_sign: sign, on_cancel: cancel }
             } else {
                 SigningForm {
-                    inputs: Inputs { document, certificate, password, password_generation, algorithm, format },
+                    inputs: Inputs {
+                        document, certificate, password, password_generation, algorithm, format,
+                        #[cfg(windows)]
+                        windows_certificates,
+                    },
                     spanish, external, busy, on_prepare: prepare,
                 }
             }

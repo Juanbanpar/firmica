@@ -18,7 +18,7 @@ use firmica_signing::{
 };
 use openssl::{bn::BigNum, ecdsa::EcdsaSig, x509::X509};
 
-use crate::{algorithm, digest, verify, CertificateError};
+use crate::{digest, signature_algorithm, verify_sha256_signature, CertificateError};
 
 /// A key handle tied to a caller-owned, authenticated session. No key export operation.
 ///
@@ -62,7 +62,7 @@ impl<'a> Pkcs11Key<'a> {
         let public = certificate
             .public_key()
             .map_err(|_| CertificateError::BackendFailure)?;
-        let algorithm = algorithm(&public)?;
+        let algorithm = signature_algorithm(&public)?;
         let attributes = session
             .get_attributes(
                 handle,
@@ -177,7 +177,7 @@ impl SigningKey for Pkcs11Key<'_> {
             }
             _ => return Err(SigningError::UnsupportedOperation),
         };
-        verify(&self.certificate, algorithm, &digest, &value)?;
+        verify_sha256_signature(&self.certificate, algorithm, &digest, &value)?;
         Ok(Signature { algorithm, value })
     }
 }

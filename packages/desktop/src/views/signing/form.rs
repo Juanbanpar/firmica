@@ -15,6 +15,8 @@ pub(super) struct Inputs {
     pub(super) password_generation: Signal<u64>,
     pub(super) algorithm: Signal<SignatureAlgorithm>,
     pub(super) format: Signal<Format>,
+    #[cfg(windows)]
+    pub(super) windows_certificates: Signal<super::windows::Picker>,
 }
 
 #[component]
@@ -32,7 +34,43 @@ pub(super) fn SigningForm(
         password_generation,
         mut algorithm,
         mut format,
+        #[cfg(windows)]
+        windows_certificates,
     } = inputs;
+    #[cfg(windows)]
+    let use_pkcs12 = external || windows_certificates.read().store().is_none();
+    #[cfg(not(windows))]
+    let use_pkcs12 = true;
+    #[cfg(windows)]
+    let native_algorithm = if use_pkcs12 {
+        None
+    } else {
+        windows_certificates.read().algorithm()
+    };
+    #[cfg(not(windows))]
+    let native_algorithm: Option<SignatureAlgorithm> = None;
+    #[cfg(windows)]
+    let sources = {
+        let mut generation = password_generation;
+        rsx! {
+            if !external {
+                super::windows::CertificatePicker {
+                    picker: windows_certificates, busy, spanish,
+                    on_change_source: move |_| {
+                        password.set(SecretString::default());
+                        *generation.write() += 1;
+                    }
+                }
+            }
+        }
+    };
+    #[cfg(not(windows))]
+    let sources = rsx! {};
+    let certificate_ready = if use_pkcs12 {
+        certificate.read().is_some()
+    } else {
+        native_algorithm.is_some()
+    };
     rsx! {
         div { class: "space-y-5",
             if !external {
@@ -40,6 +78,8 @@ pub(super) fn SigningForm(
                 FileSelection { id: "sign-document", selected: document, busy, certificate: false, spanish }
             }
             }
+            {sources}
+            if use_pkcs12 {
             label { class: "block", {tr(spanish, "Certificado PKCS#12 (hasta 8 MiB)", "PKCS#12 certificate (up to 8 MiB)")}
                 FileSelection { id: "sign-certificate", selected: certificate, busy, certificate: true, spanish }
             }
@@ -52,13 +92,18 @@ pub(super) fn SigningForm(
                     }
                 }
             }
+            }
             if !external {
+            if use_pkcs12 {
             label { class: "block", {tr(spanish, "Algoritmo", "Algorithm")}
                 select { id: "sign-algorithm", class: FIELD, disabled: busy(), value: if algorithm() == SignatureAlgorithm::RsaPkcs1v15Sha256 { "rsa" } else { "ec" },
                     onchange: move |event| algorithm.set(if event.value() == "ec" { SignatureAlgorithm::EcdsaP256Sha256 } else { SignatureAlgorithm::RsaPkcs1v15Sha256 }),
                     option { value: "rsa", "RSA PKCS#1 v1.5 / SHA-256" }
                     option { value: "ec", "ECDSA P-256 / SHA-256" }
                 }
+            }
+            } else if let Some(algorithm) = native_algorithm {
+                p { {tr(spanish, "Algoritmo de firma", "Signing algorithm")} " · " {super::review::algorithm_name(algorithm)} }
             }
             label { class: "block", {tr(spanish, "Formato", "Format")}
                 select { id: "sign-format", class: FIELD, disabled: busy(), value: format_value(&format()),
@@ -119,7 +164,7 @@ pub(super) fn SigningForm(
                 }
             }
             }
-            button { id: "sign-prepare", class: BUTTON, disabled: busy() || (!external && document.read().is_none()) || certificate.read().is_none(),
+            button { id: "sign-prepare", class: BUTTON, disabled: busy() || (!external && document.read().is_none()) || !certificate_ready,
                 onclick: move |event| on_prepare.call(event), {tr(spanish, "Abrir y revisar", "Open and review")}
             }
         }

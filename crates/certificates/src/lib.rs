@@ -60,7 +60,11 @@ pub enum CertificateError {
     BackendFailure,
 }
 
-fn algorithm(key: &PKeyRef<Public>) -> Result<SignatureAlgorithm, CertificateError> {
+/// Classify a public key under the supported document-signing profiles.
+///
+/// # Errors
+/// Returns [`CertificateError::UnsupportedKey`] for other key types, sizes or curves.
+pub fn signature_algorithm(key: &PKeyRef<Public>) -> Result<SignatureAlgorithm, CertificateError> {
     match key.id() {
         Id::RSA if key.bits() >= 2048 => Ok(SignatureAlgorithm::RsaPkcs1v15Sha256),
         Id::EC
@@ -84,7 +88,12 @@ fn digest(input: SigningInput<'_>) -> [u8; 32] {
     }
 }
 
-fn verify(
+/// Verify a provider's normalized signature over a SHA-256 digest using the
+/// certificate's public key. This verifies the signature, without evaluating trust.
+///
+/// # Errors
+/// Returns [`SigningError::InvalidSignature`] when verification fails.
+pub fn verify_sha256_signature(
     certificate: &X509,
     algorithm: SignatureAlgorithm,
     digest: &[u8; 32],

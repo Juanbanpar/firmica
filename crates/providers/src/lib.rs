@@ -4,13 +4,15 @@
 //! The caller applies certificate policy and obtains consent before signing, then
 //! checks session cleanup before publishing output. Provider operations can block.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 mod candidate;
 pub mod pkcs12;
 mod registry;
 mod session;
+#[cfg(windows)]
+pub mod windows;
 
 pub use candidate::{
     Authentication, Availability, CertificateCandidate, IdentityReference, ProviderId,

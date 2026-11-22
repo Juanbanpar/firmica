@@ -658,3 +658,6 @@ fn windows_device_and_pipe_paths_are_rejected_before_opening() {
         ));
     }
 }
+
+#[cfg(windows)]
+mod windows_store;
